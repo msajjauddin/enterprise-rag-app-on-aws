@@ -41,8 +41,13 @@ resource "aws_cognito_user_pool" "main" {
   }
 }
 
+locals {
+  # Remove "aws" from the domain prefix since it's a reserved word in Cognito
+  cognito_domain_prefix = replace("${var.project_name}-${var.stage}-auth", "aws", "")
+}
+
 resource "aws_cognito_user_pool_domain" "main" {
-  domain       = "${var.project_name}-${var.stage}-auth"
+  domain       = local.cognito_domain_prefix
   user_pool_id = aws_cognito_user_pool.main.id
 }
 
