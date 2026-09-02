@@ -365,12 +365,12 @@ jobs:
             # Wait a moment to ensure state is consistent
             sleep 2
             
-            echo "Extracting from apply output..."
-            COGNITO_CLIENT_ID=$(grep -m1 "cognito_app_client_id" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-            API_ENDPOINT=$(grep -m1 "api_endpoint" apply_output.txt | sed -E 's/.*= "?([^"]+)"?.*/\1/' || echo "")
-            
-            echo "Extracted COGNITO_CLIENT_ID: $COGNITO_CLIENT_ID"
+            echo "Extracting outputs from terraform state..."
+            API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
+            COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id 2>/dev/null || echo "")
+
             echo "Extracted API_ENDPOINT: $API_ENDPOINT"
+            echo "Extracted COGNITO_CLIENT_ID: $COGNITO_CLIENT_ID"
             
             # Create a copy in the root directory for the artifact upload
             echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > ../../env_vars.env
@@ -584,12 +584,11 @@ jobs:
       - name: Run integration tests
         run: |
           echo "Using API endpoint: $API_ENDPOINT"
-          
-          if [ "$API_ENDPOINT" == "https://example.com" ]; then
+
+          if [ -z "$API_ENDPOINT" ] || [ "$API_ENDPOINT" == "https://example.com" ]; then
             echo "Skipping integration tests as API endpoint could not be determined"
             echo "<testsuites><testsuite name='placeholder'><testcase name='placeholder'><skipped message='API endpoint not available'/></testcase></testsuite></testsuites>" > integration-test-results.xml
           else
-            # Use our custom integration test script
             echo "Running custom integration test script..."
             python src/tests/integration/run_integration_tests.py
           fi
