@@ -166,7 +166,7 @@ variable "documents_bucket_name" {
 variable "github_repo" {
   description = "GitHub Repo Name"
   type        = string
-  default     = “msajjauddin/enterprise-rag-app-on-aws”
+  default     = "msajjauddin/enterprise-rag-app-on-aws"
 }
 
 variable "github_branch" {
