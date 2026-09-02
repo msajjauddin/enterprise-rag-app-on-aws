@@ -59,17 +59,18 @@ resource "aws_cognito_user_pool_client" "streamlit_client" {
   refresh_token_validity = 30
   access_token_validity  = 1
   id_token_validity      = 1
+
   
   # Explicitly set allowed OAuth flows and scopes
-  allowed_oauth_flows                  = ["implicit"]
-  allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_scopes                 = ["email", "openid", "profile"]
+  allowed_oauth_flows                  = []
+  allowed_oauth_flows_user_pool_client = false
+  allowed_oauth_scopes                 = []
   
   # Add explicit auth flows to enable USER_PASSWORD_AUTH
-  explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
 
-  callback_urls = ["http://localhost:8501/"]
-  logout_urls   = ["http://localhost:8501/"]
+  callback_urls = var.allowed_callback_urls
+  logout_urls   = var.allowed_logout_urls
   
   token_validity_units {
     access_token  = "hours"

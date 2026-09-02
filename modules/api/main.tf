@@ -449,21 +449,6 @@ resource "aws_api_gateway_stage" "main" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   stage_name    = var.stage
   
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
-    format = jsonencode({
-      requestId              = "$context.requestId"
-      ip                     = "$context.identity.sourceIp"
-      requestTime            = "$context.requestTime"
-      httpMethod             = "$context.httpMethod"
-      routeKey               = "$context.resourcePath"
-      status                 = "$context.status"
-      protocol               = "$context.protocol"
-      responseLength         = "$context.responseLength"
-      integrationErrorMessage = "$context.integrationErrorMessage"
-    })
-  }
-  
   tags = {
     Name = "${var.project_name}-${var.stage}-stage"
   }
