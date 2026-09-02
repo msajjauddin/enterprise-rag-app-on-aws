@@ -8,11 +8,11 @@ lambda_memory_size = 512
 lambda_timeout     = 150
 
 # GitHub repository settings
-github_repo        = “msajjauddin/enterprise-rag-app-on-aws”
+github_repo        = "msajjauddin/enterprise-rag-app-on-aws"
 github_branch      = "main"
 
 # Monitoring
-alert_email = “msajjauddin@gmail.com”
+alert_email = "msajjauddin@gmail.com"
 
 # VPC settings
 vpc_cidr   = "10.0.0.0/16"

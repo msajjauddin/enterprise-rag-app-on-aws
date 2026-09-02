@@ -18,13 +18,13 @@ lambda_timeout     = 150
 # -------------------------
 # GitHub Repository Settings
 # -------------------------
-github_repo   = “msajjauddin/enterprise-rag-app-on-aws”
+github_repo   = "msajjauddin/enterprise-rag-app-on-aws"
 github_branch = "develop"
 
 # -------------------------
 # Monitoring
 # -------------------------
-alert_email = “msajjauddin@gmail.com”
+alert_email = "msajjauddin@gmail.com"
 
 # -------------------------
 # VPC Settings
