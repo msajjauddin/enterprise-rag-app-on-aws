@@ -385,75 +385,14 @@ jobs:
           # Apply the plan and capture output
           terraform apply -auto-approve tfplan | tee apply_output.txt
           
-          echo "Extracting outputs..."
+          # Use helper script to extract outputs
+          chmod +x ../../scripts/extract_outputs.sh
+          ../../scripts/extract_outputs.sh apply_output.txt ../../env_vars.env
           
-          # Try multiple methods to get outputs
-          API_ENDPOINT=""
-          COGNITO_CLIENT_ID=""
-          
-          # Method 1: Try direct terraform output (may fail due to state sync)
-          if [ -z "$API_ENDPOINT" ]; then
-            API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
-          fi
-          
-          # Method 2: Try with refresh first
-          if [ -z "$API_ENDPOINT" ]; then
-            terraform refresh > /dev/null 2>&1
-            API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
-          fi
-          
-          # Method 3: Parse from apply output (most reliable)
-          if [ -z "$API_ENDPOINT" ]; then
-            API_ENDPOINT=$(grep -o 'api_endpoint = "[^"]*"' apply_output.txt | head -1 | cut -d'"' -f2 || echo "")
-          fi
-          
-          # Method 4: Try JSON output
-          if [ -z "$API_ENDPOINT" ]; then
-            terraform output -json > outputs.json 2>/dev/null
-            API_ENDPOINT=$(jq -r '.api_endpoint.value // ""' outputs.json 2>/dev/null || echo "")
-          fi
-          
-          # Same for Cognito Client ID
-          if [ -z "$COGNITO_CLIENT_ID" ]; then
-            COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id 2>/dev/null || echo "")
-          fi
-          if [ -z "$COGNITO_CLIENT_ID" ]; then
-            terraform refresh > /dev/null 2>&1
-            COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id 2>/dev/null || echo "")
-          fi
-          if [ -z "$COGNITO_CLIENT_ID" ]; then
-            COGNITO_CLIENT_ID=$(grep -o 'cognito_app_client_id = "[^"]*"' apply_output.txt | head -1 | cut -d'"' -f2 || echo "")
-          fi
-          if [ -z "$COGNITO_CLIENT_ID" ]; then
-            COGNITO_CLIENT_ID=$(jq -r '.cognito_app_client_id.value // ""' outputs.json 2>/dev/null || echo "")
-          fi
-          
-          # If still empty, use hardcoded values from apply output or fail gracefully
-          if [ -z "$API_ENDPOINT" ]; then
-            echo "⚠️  Warning: Could not extract API endpoint. Integration tests may fail."
-            API_ENDPOINT="https://example.com"
-          fi
-          
-          if [ -z "$COGNITO_CLIENT_ID" ]; then
-            echo "⚠️  Warning: Could not extract Cognito Client ID. Integration tests may fail."
-            COGNITO_CLIENT_ID="unknown"
-          fi
-          
-          echo "✅ API_ENDPOINT: $API_ENDPOINT"
-          echo "✅ COGNITO_CLIENT_ID: $COGNITO_CLIENT_ID"
-          
-          # Create env file
-          echo "COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID" > ../../env_vars.env
-          echo "API_ENDPOINT=$API_ENDPOINT" >> ../../env_vars.env
-          echo "COGNITO_DOMAIN=$COGNITO_DOMAIN" >> ../../env_vars.env
-          echo "COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID" >> ../../env_vars.env
-          echo "DB_ENDPOINT=$DB_ENDPOINT" >> ../../env_vars.env
-          echo "DOCUMENT_BUCKET=$DOCUMENT_BUCKET" >> ../../env_vars.env
-          echo "DYNAMODB_TABLE=$DYNAMODB_TABLE" >> ../../env_vars.env
-          echo "VPC_ID=$VPC_ID" >> ../../env_vars.env
-          
-          # Set GitHub Actions outputs
+          # Source the env file and set GitHub outputs
+          source ../../env_vars.env
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "auth_endpoint=$AUTH_ENDPOINT" >> $GITHUB_OUTPUT
           echo "cognito_client_id=$COGNITO_CLIENT_ID" >> $GITHUB_OUTPUT
           echo "cognito_domain=$COGNITO_DOMAIN" >> $GITHUB_OUTPUT
           echo "cognito_user_pool_id=$COGNITO_USER_POOL_ID" >> $GITHUB_OUTPUT
@@ -461,6 +400,10 @@ jobs:
           echo "document_bucket=$DOCUMENT_BUCKET" >> $GITHUB_OUTPUT
           echo "dynamodb_table=$DYNAMODB_TABLE" >> $GITHUB_OUTPUT
           echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          
+          echo "✅ API Endpoint: $API_ENDPOINT"
+          echo "✅ Cognito Client ID: $COGNITO_CLIENT_ID"
+          echo "✅ Cognito Domain: $COGNITO_DOMAIN"
 
       - name: Upload UI Env File as Artifact
         uses: actions/upload-artifact@v4
