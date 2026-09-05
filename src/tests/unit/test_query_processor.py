@@ -237,7 +237,11 @@ class TestQueryProcessor(unittest.TestCase):
         # Verify results
         self.assertEqual(response["statusCode"], 200)
         response_body = json.loads(response["body"])
-        self.assertEqual(response_body["message"], "Query processor is healthy")
+        # In src/tests/unit/test_query_processor.py, line ~240
+        self.assertEqual(
+            response_body["message"], 
+            "Enhanced query processor with stateless agentic RAG is healthy"
+        )
         self.assertEqual(response_body["stage"], "test")
 
     def test_handler_missing_query(self):
@@ -300,7 +304,7 @@ class TestQueryProcessor(unittest.TestCase):
         response_body = json.loads(response["body"])
         self.assertEqual(response_body["query"], "What is RAG?")
         self.assertEqual(response_body["response"], "RAG stands for Retrieval-Augmented Generation. It combines retrieval and generation techniques.")
-        self.assertEqual(len(response_body["results"]), 1)
+        self.assertEqual(len(response_body["chunks"]), 1)
         self.assertEqual(response_body["count"], 1)
         
         # Verify function calls
