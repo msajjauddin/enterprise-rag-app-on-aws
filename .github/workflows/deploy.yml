@@ -373,7 +373,25 @@ jobs:
         with:
           name: terraform-plan-${{ needs.determine_environment.outputs.environment }}
           path: environments/${{ needs.determine_environment.outputs.environment }}
-      
+
+      - name: Create Backend Configuration 
+        run: |
+          cd environments/$STAGE
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket                  = "${PROJECT_NAME}-terraform-state"
+              key                     = "${STAGE}/terraform.tfstate"
+              region                  = "${AWS_REGION}"
+              dynamodb_table          = "${PROJECT_NAME}-${STAGE}-terraform-state-lock"
+              encrypt                 = true
+              skip_credentials_validation = true
+              skip_metadata_api_check     = true
+            }
+          }
+          EOF
+          cd ../..
+
       - name: Terraform Init
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: terraform init
