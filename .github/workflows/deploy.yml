@@ -400,15 +400,36 @@ jobs:
         id: terraform-apply
         working-directory: environments/${{ needs.determine_environment.outputs.environment }}
         run: |
-          # Apply the plan and capture output
-          terraform apply -auto-approve tfplan | tee apply_output.txt
-          
-          # Use helper script to extract outputs
-          chmod +x ../../scripts/extract_outputs.sh
-          ../../scripts/extract_outputs.sh apply_output.txt ../../env_vars.env
-          
-          # Source the env file and set GitHub outputs
-          source ../../env_vars.env
+          # ✅ APPLY ONLY (no tee to file needed)
+          terraform apply -auto-approve tfplan
+
+          sleep 50  # Give Terraform a moment to finalize outputs
+
+          # ✅ Extract outputs directly using terraform output
+          API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "")
+          AUTH_ENDPOINT=$(terraform output -raw auth_endpoint 2>/dev/null || echo "")
+          COGNITO_CLIENT_ID=$(terraform output -raw cognito_app_client_id 2>/dev/null || echo "")
+          COGNITO_DOMAIN=$(terraform output -raw cognito_domain 2>/dev/null || echo "")
+          COGNITO_USER_POOL_ID=$(terraform output -raw cognito_user_pool_id 2>/dev/null || echo "")
+          DB_ENDPOINT=$(terraform output -raw db_endpoint 2>/dev/null || echo "")
+          DOCUMENT_BUCKET=$(terraform output -raw document_bucket 2>/dev/null || echo "")
+          DYNAMODB_TABLE=$(terraform output -raw dynamodb_table 2>/dev/null || echo "")
+          VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo "")
+
+          # ✅ Create clean env file for UI artifact
+          cat > ../../env_vars.env << EOF
+          API_ENDPOINT=$API_ENDPOINT
+          AUTH_ENDPOINT=$AUTH_ENDPOINT
+          COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID
+          COGNITO_DOMAIN=$COGNITO_DOMAIN
+          COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID
+          DB_ENDPOINT=$DB_ENDPOINT
+          DOCUMENT_BUCKET=$DOCUMENT_BUCKET
+          DYNAMODB_TABLE=$DYNAMODB_TABLE
+          VPC_ID=$VPC_ID
+          EOF
+
+          # ✅ Set GitHub step outputs
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
           echo "auth_endpoint=$AUTH_ENDPOINT" >> $GITHUB_OUTPUT
           echo "cognito_client_id=$COGNITO_CLIENT_ID" >> $GITHUB_OUTPUT
@@ -418,7 +439,7 @@ jobs:
           echo "document_bucket=$DOCUMENT_BUCKET" >> $GITHUB_OUTPUT
           echo "dynamodb_table=$DYNAMODB_TABLE" >> $GITHUB_OUTPUT
           echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
-          
+
           echo "✅ API Endpoint: $API_ENDPOINT"
           echo "✅ Cognito Client ID: $COGNITO_CLIENT_ID"
           echo "✅ Cognito Domain: $COGNITO_DOMAIN"
