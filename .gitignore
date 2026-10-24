@@ -1,2 +1,16 @@
 rag-aws-interview-guide.md
 project-explanation-interview-1.md
+# Terraform
+.terraform/
+*.tfplan
+tfplan
+environments/*/backend.tf
+
+# Python / test output
+__pycache__/
+.pytest_cache/
+.tox/
+coverage.xml
+.coverage
+eval-report.json
+integration-test-results.xml

@@ -1,19 +1,19 @@
 # ===============================
 # Compute Module for RAG System
 # ===============================
+# Ingestion pipeline (S3 / connectors -> SQS -> document processor Lambda, with DLQ),
+# the db_init migration Lambda and the Cognito pre-token-generation Lambda.
 
 # =========================
 # Locals
 # =========================
 
 locals {
-  name                    = "${var.project_name}-${var.stage}" 
+  name                    = "${var.project_name}-${var.stage}"
   document_processor_name = "${var.project_name}-${var.stage}-document-processor"
-  query_processor_name    = "${var.project_name}-${var.stage}-query-processor"
-  upload_handler_name     = "${var.project_name}-${var.stage}-upload-handler"
   db_init_name            = "${var.project_name}-${var.stage}-db-init"
-  auth_handler_name       = "${var.project_name}-${var.stage}-auth-handler"
-  
+  token_enricher_name     = "${var.project_name}-${var.stage}-token-enricher"
+
   common_tags = {
     Project     = var.project_name
     Environment = var.stage
@@ -21,29 +21,79 @@ locals {
   }
 }
 
-# ===================================================================
-# Store GEMINI_API_KEY credentials placeholder in AWS Secrets Manager
-# ===================================================================
+data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
-resource "aws_secretsmanager_secret" "gemini_api_credentials" {
-  name        = "${local.name}-gemini-api-key"
-  description = "Gemini API Key for ${local.name}"
+# =========================
+# Ingestion queue + DLQ
+# =========================
 
-  tags = {
-    Name        = "${local.name}-gemini-api-key"
-    Environment = var.stage
-  }
+resource "aws_sqs_queue" "ingestion_dlq" {
+  name                      = "${local.name}-ingestion-dlq"
+  message_retention_seconds = 1209600 # 14 days
+  sqs_managed_sse_enabled   = true
+
+  tags = local.common_tags
 }
 
-resource "aws_secretsmanager_secret_version" "gemini_api_credentials" {
-  secret_id = aws_secretsmanager_secret.gemini_api_credentials.id
-  secret_string = jsonencode({
-    GEMINI_API_KEY    = var.gemini_api_key
+resource "aws_sqs_queue" "ingestion" {
+  name                       = "${local.name}-ingestion"
+  visibility_timeout_seconds = var.ingestion_timeout * 6
+  message_retention_seconds  = 345600 # 4 days
+  receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.ingestion_dlq.arn
+    maxReceiveCount     = var.ingestion_max_receive_count
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_sqs_queue_redrive_allow_policy" "ingestion_dlq" {
+  queue_url = aws_sqs_queue.ingestion_dlq.id
+
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue",
+    sourceQueueArns   = [aws_sqs_queue.ingestion.arn]
   })
 }
 
+# S3 may publish object-created events to the queue
+resource "aws_sqs_queue_policy" "ingestion" {
+  queue_url = aws_sqs_queue.ingestion.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Sid       = "AllowS3Events",
+      Effect    = "Allow",
+      Principal = { Service = "s3.amazonaws.com" },
+      Action    = "sqs:SendMessage",
+      Resource  = aws_sqs_queue.ingestion.arn,
+      Condition = {
+        ArnEquals    = { "aws:SourceArn" = var.documents_bucket_arn },
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+      }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_notification" "bucket_notification" {
+  bucket = var.documents_bucket
+
+  queue {
+    queue_arn     = aws_sqs_queue.ingestion.arn
+    events        = ["s3:ObjectCreated:*"]
+    filter_prefix = "uploads/"
+  }
+
+  depends_on = [aws_sqs_queue_policy.ingestion]
+}
+
 # =========================
-# IAM Role and Policy
+# IAM - ingestion Lambdas
 # =========================
 
 resource "aws_iam_role" "lambda_role" {
@@ -52,18 +102,14 @@ resource "aws_iam_role" "lambda_role" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow",
+      Effect    = "Allow",
       Principal = { Service = "lambda.amazonaws.com" },
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 
   tags = {
     Name = "${var.project_name}-${var.stage}-lambda-role"
-  }
-
-  lifecycle {
-    prevent_destroy = true
   }
 }
 
@@ -80,33 +126,35 @@ resource "aws_iam_policy" "lambda_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ],
-        Resource = "arn:aws:logs:*:*:*"
+        Resource = "arn:${data.aws_partition.current.partition}:logs:*:*:*"
       },
       {
         Effect = "Allow",
-        Action = [
-          "s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:HeadObject"
-        ],
+        Action = ["s3:GetObject", "s3:ListBucket"],
         Resource = [
-          "arn:aws:s3:::${var.documents_bucket}",
-          "arn:aws:s3:::${var.documents_bucket}/*"
+          var.documents_bucket_arn,
+          "${var.documents_bucket_arn}/*"
         ]
       },
       {
         Effect = "Allow",
         Action = [
-          "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan"
+          "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"
         ],
         Resource = [
-          "arn:aws:dynamodb:*:*:table/${var.metadata_table}",
-          "arn:aws:dynamodb:*:*:table/${var.metadata_table}/index/*"
+          var.metadata_table_arn,
+          "${var.metadata_table_arn}/index/*"
         ]
       },
       {
-        Effect = "Allow",
-        Action = ["bedrock:InvokeModel"],
-        Resource = "*"
+        Effect   = "Allow",
+        Action   = ["bedrock:InvokeModel"],
+        Resource = "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${var.embedding_model_id}"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"],
+        Resource = aws_sqs_queue.ingestion.arn
       },
       {
         Effect = "Allow",
@@ -118,30 +166,9 @@ resource "aws_iam_policy" "lambda_policy" {
         Resource = "*"
       },
       {
-        Effect = "Allow",
-        Action = ["secretsmanager:GetSecretValue"],
-        Resource = [
-          var.db_secret_arn,
-          aws_secretsmanager_secret.gemini_api_credentials.arn
-        ]
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "cognito-idp:AdminInitiateAuth",
-          "cognito-idp:AdminCreateUser",
-          "cognito-idp:AdminSetUserPassword",
-          "cognito-idp:AdminUpdateUserAttributes",
-          "cognito-idp:AdminGetUser",
-          "cognito-idp:AdminConfirmSignUp",
-          "cognito-idp:SignUp",
-          "cognito-idp:ConfirmSignUp",
-          "cognito-idp:InitiateAuth",
-          "cognito-idp:ForgotPassword",
-          "cognito-idp:ConfirmForgotPassword",
-          "cognito-idp:RespondToAuthChallenge"
-        ],
-        Resource = var.cognito_user_pool_arn != "" ? [var.cognito_user_pool_arn] : ["*"]
+        Effect   = "Allow",
+        Action   = ["secretsmanager:GetSecretValue"],
+        Resource = [var.db_app_secret_arn, var.db_master_secret_arn]
       }
     ]
   })
@@ -156,24 +183,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 # Lambda Code from S3
 # =========================
 
-data "aws_s3_object" "auth_handler_code" {
-  bucket = var.lambda_code_bucket
-  key    = "lambda/auth_handler.zip"
-}
-
 data "aws_s3_object" "document_processor_code" {
   bucket = var.lambda_code_bucket
   key    = "lambda/document_processor.zip"
-}
-
-data "aws_s3_object" "query_processor_code" {
-  bucket = var.lambda_code_bucket
-  key    = "lambda/query_processor.zip"
-}
-
-data "aws_s3_object" "upload_handler_code" {
-  bucket = var.lambda_code_bucket
-  key    = "lambda/upload_handler.zip"
 }
 
 data "aws_s3_object" "db_init_code" {
@@ -181,58 +193,46 @@ data "aws_s3_object" "db_init_code" {
   key    = "lambda/db_init.zip"
 }
 
+data "aws_s3_object" "token_enricher_code" {
+  bucket = var.lambda_code_bucket
+  key    = "lambda/token_enricher.zip"
+}
+
 # =========================
 # Lambda Functions
 # =========================
-
-resource "aws_lambda_function" "auth_handler" {
-  function_name = local.auth_handler_name
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "auth_handler.handler"
-  runtime       = "python3.11"
-  memory_size   = var.lambda_memory_size
-  timeout       = var.lambda_timeout
-
-  environment {
-    variables = {
-      USER_POOL_ID = var.cognito_user_pool_id
-      CLIENT_ID    = var.cognito_app_client_id
-      STAGE        = var.stage
-    }
-  }
-
-  s3_bucket        = var.lambda_code_bucket
-  s3_key           = "lambda/auth_handler.zip"
-  source_code_hash = data.aws_s3_object.auth_handler_code.etag
-}
 
 resource "aws_lambda_function" "document_processor" {
   function_name = local.document_processor_name
   role          = aws_iam_role.lambda_role.arn
   handler       = "document_processor.handler"
-  runtime       = "python3.11"
+  runtime       = "python3.12"
   memory_size   = var.lambda_memory_size
-  timeout       = var.lambda_timeout
+  timeout       = var.ingestion_timeout
 
   environment {
     variables = {
-      DOCUMENTS_BUCKET         = var.documents_bucket
-      METADATA_TABLE           = var.metadata_table
-      STAGE                    = var.stage
-      DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
-      GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
-      TEMPERATURE              = 0.2
-      MAX_OUTPUT_TOKENS        = 1024
-      TOP_K                    = 40
-      TOP_P                    = 0.8
-      SIMILARITY_THRESHOLD     = 0.7
+      DOCUMENTS_BUCKET     = var.documents_bucket
+      METADATA_TABLE       = var.metadata_table
+      STAGE                = var.stage
+      DB_HOST              = var.db_write_host
+      DB_NAME              = var.db_name
+      DB_SECRET_ARN        = var.db_app_secret_arn
+      EMBEDDING_MODEL_ID   = var.embedding_model_id
+      EMBEDDING_DIMENSIONS = var.embedding_dimensions
+      EMBEDDING_BATCH_SIZE = 16
+      CHUNK_SIZE           = 1000
+      CHUNK_OVERLAP        = 200
     }
   }
 
   vpc_config {
     subnet_ids         = var.vpc_subnet_ids
     security_group_ids = [var.lambda_security_group_id]
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   s3_bucket        = var.lambda_code_bucket
@@ -244,77 +244,16 @@ resource "aws_lambda_function" "document_processor" {
   }
 }
 
-resource "aws_lambda_function" "query_processor" {
-  function_name = local.query_processor_name
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "query_processor.handler"
-  runtime       = "python3.11"
-  memory_size   = var.lambda_memory_size
-  timeout       = var.lambda_timeout
+resource "aws_lambda_event_source_mapping" "ingestion" {
+  event_source_arn                   = aws_sqs_queue.ingestion.arn
+  function_name                      = aws_lambda_function.document_processor.arn
+  batch_size                         = var.ingestion_batch_size
+  maximum_batching_window_in_seconds = 10
+  function_response_types            = ["ReportBatchItemFailures"]
 
-  environment {
-    variables = {
-      DOCUMENTS_BUCKET         = var.documents_bucket
-      METADATA_TABLE           = var.metadata_table
-      STAGE                    = var.stage
-      DB_SECRET_ARN            = var.db_secret_arn
-      GEMINI_SECRET_ARN        = aws_secretsmanager_secret.gemini_api_credentials.arn
-      GEMINI_EMBEDDING_MODEL   = var.gemini_embedding_model
-      TEMPERATURE              = 0.2
-      MAX_OUTPUT_TOKENS        = 1024
-      TOP_K                    = 40
-      TOP_P                    = 0.8
-      SIMILARITY_THRESHOLD     = 0.7
-
-      # MCP Configuration
-      MCP_TIMEOUT              = var.mcp_timeout
-      RAG_CONFIDENCE_THRESHOLD = var.rag_confidence_threshold
-      MIN_CONTEXT_LENGTH       = var.min_context_length
-    }
-  }
-
-  vpc_config {
-    subnet_ids         = var.vpc_subnet_ids
-    security_group_ids = [var.lambda_security_group_id]
-  }
-
-  s3_bucket        = var.lambda_code_bucket
-  s3_key           = "lambda/query_processor.zip"
-  source_code_hash = data.aws_s3_object.query_processor_code.etag
-
-  tags = {
-    Name = local.query_processor_name
-  }
-}
-
-resource "aws_lambda_function" "upload_handler" {
-  function_name = local.upload_handler_name
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "upload_handler.handler"
-  runtime       = "python3.11"
-  memory_size   = var.lambda_memory_size
-  timeout       = var.lambda_timeout
-
-  environment {
-    variables = {
-      DOCUMENTS_BUCKET = var.documents_bucket
-      METADATA_TABLE   = var.metadata_table
-      STAGE            = var.stage
-      DB_SECRET_ARN    = var.db_secret_arn
-    }
-  }
-
-  vpc_config {
-    subnet_ids         = var.vpc_subnet_ids
-    security_group_ids = [var.lambda_security_group_id]
-  }
-
-  s3_bucket        = var.lambda_code_bucket
-  s3_key           = "lambda/upload_handler.zip"
-  source_code_hash = data.aws_s3_object.upload_handler_code.etag
-
-  tags = {
-    Name = local.upload_handler_name
+  # Bounds concurrent writers on Aurora and Bedrock embedding throughput
+  scaling_config {
+    maximum_concurrency = var.ingestion_max_concurrency
   }
 }
 
@@ -322,18 +261,20 @@ resource "aws_lambda_function" "db_init" {
   function_name = local.db_init_name
   role          = aws_iam_role.lambda_role.arn
   handler       = "db_init.handler"
-  runtime       = "python3.11"
-  memory_size   = var.lambda_memory_size
-  timeout       = var.lambda_timeout
+  runtime       = "python3.12"
+  memory_size   = 256
+  timeout       = 300
 
   environment {
     variables = {
-      DOCUMENTS_BUCKET = var.documents_bucket
-      METADATA_TABLE   = var.metadata_table
-      STAGE            = var.stage
-      DB_SECRET_ARN    = var.db_secret_arn
-      MAX_RETRIES      = var.max_retries
-      RETRY_DELAY      = var.retry_delay
+      STAGE                = var.stage
+      DB_HOST              = var.db_cluster_endpoint
+      DB_NAME              = var.db_name
+      DB_MASTER_SECRET_ARN = var.db_master_secret_arn
+      DB_APP_SECRET_ARN    = var.db_app_secret_arn
+      EMBEDDING_DIMENSIONS = var.embedding_dimensions
+      MAX_RETRIES          = var.max_retries
+      RETRY_DELAY          = var.retry_delay
     }
   }
 
@@ -352,25 +293,49 @@ resource "aws_lambda_function" "db_init" {
 }
 
 # =========================
-# Lambda Triggers
+# Cognito pre-token-generation trigger
 # =========================
+# Copies corporate IdP groups into cognito:groups so the access token carries them.
 
-resource "aws_lambda_permission" "s3_invoke_lambda_document_processor" {
-  statement_id  = "AllowExecutionFromS3Bucket"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.document_processor.function_name
-  principal     = "s3.amazonaws.com"
-  source_arn    = "arn:aws:s3:::${var.documents_bucket}"
+resource "aws_iam_role" "token_enricher" {
+  name = "${local.name}-token-enricher-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
 }
 
-resource "aws_s3_bucket_notification" "bucket_notification" {
-  bucket = var.documents_bucket
+resource "aws_iam_role_policy_attachment" "token_enricher_logs" {
+  role       = aws_iam_role.token_enricher.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
 
-  lambda_function {
-    lambda_function_arn = aws_lambda_function.document_processor.arn
-    events              = ["s3:ObjectCreated:*"]
-    filter_prefix       = "uploads/"
+resource "aws_lambda_function" "token_enricher" {
+  function_name = local.token_enricher_name
+  role          = aws_iam_role.token_enricher.arn
+  handler       = "token_enricher.handler"
+  runtime       = "python3.12"
+  memory_size   = 128
+  timeout       = 5
+
+  environment {
+    variables = {
+      GROUPS_ATTRIBUTE = "custom:groups"
+    }
   }
 
-  depends_on = [aws_lambda_permission.s3_invoke_lambda_document_processor]
+  s3_bucket        = var.lambda_code_bucket
+  s3_key           = "lambda/token_enricher.zip"
+  source_code_hash = data.aws_s3_object.token_enricher_code.etag
+
+  tags = {
+    Name = local.token_enricher_name
+  }
 }

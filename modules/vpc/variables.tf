@@ -48,3 +48,20 @@ variable "bastion_allowed_cidr" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+variable "app_port" {
+  description = "Container port of the query service"
+  type        = number
+  default     = 8000
+}
+
+variable "enable_rds_proxy" {
+  description = "Whether the database is fronted by RDS Proxy (prod). When false, app security groups reach Aurora directly."
+  type        = bool
+  default     = true
+}
+
+variable "interface_endpoints" {
+  description = "AWS services reached through interface VPC endpoints"
+  type        = list(string)
+  default     = ["bedrock-runtime", "bedrock-mantle", "secretsmanager", "logs"]
+}

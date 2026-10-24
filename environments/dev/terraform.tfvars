@@ -1,5 +1,5 @@
 # =========================
-# Root terraform.tfvars
+# Root terraform.tfvars (dev)
 # =========================
 
 # -------------------------
@@ -10,50 +10,70 @@ stage        = "dev"
 aws_region   = "us-east-1"
 
 # -------------------------
-# Lambda Settings
-# -------------------------
-lambda_memory_size = 512
-lambda_timeout     = 150
-
-# -------------------------
-# GitHub Repository Settings
-# -------------------------
-github_repo   = "msajjauddin/enterprise-rag-app-on-aws"
-github_branch = "develop"
-
-# -------------------------
 # Monitoring
 # -------------------------
 alert_email = "msajjauddin@gmail.com"
 
 # -------------------------
-# VPC Settings
+# VPC Settings (2 AZs, single NAT gateway)
 # -------------------------
-vpc_cidr              = "10.0.0.0/16"
-az_count              = 2
-single_nat_gateway    = true        # Cost saving for dev environment
-enable_flow_logs      = false       # Only needed for prod
-create_bastion_sg     = true        # Useful for dev environment
-bastion_allowed_cidr  = ["0.0.0.0/0"]  # Restrict this in production
+vpc_cidr             = "10.0.0.0/16"
+az_count             = 2
+single_nat_gateway   = true
+enable_flow_logs     = false
+create_bastion_sg    = true
+bastion_allowed_cidr = ["10.0.0.0/16"]
 
 # -------------------------
 # Storage Settings
 # -------------------------
-enable_lifecycle_rules       = false  # Only enable in prod
-standard_ia_transition_days  = 90
-glacier_transition_days      = 365
+enable_lifecycle_rules      = false
+standard_ia_transition_days = 90
 
 # -------------------------
-# Database Settings
+# Database: Serverless v2, min 0 (auto-pause), no reader, no proxy
 # -------------------------
-db_instance_class     = "db.t3.micro"
-db_allocated_storage  = 20
+db_instance_class     = "db.serverless"
+db_reader_count       = 0
+db_serverless_min_acu = 0
+db_serverless_max_acu = 4
 db_name               = "ragapp"
 db_username           = "ragadmin"
-import_db             = false
-reset_db_password     = false  # Only set to true when you need to reset the password
+enable_rds_proxy      = false
 
-# MCP Configuration
-mcp_timeout = 60
-rag_confidence_threshold = 0.7
-min_context_length = 100
+# -------------------------
+# Cache: single small node
+# -------------------------
+cache_node_type  = "cache.t4g.micro"
+cache_node_count = 1
+
+# -------------------------
+# Ingestion Lambda
+# -------------------------
+lambda_memory_size = 1024
+
+# -------------------------
+# Query service: scaled to zero outside working hours
+# -------------------------
+task_cpu          = 1024
+task_memory       = 2048
+default_min_tasks = 1
+default_max_tasks = 2
+schedule_timezone = "Asia/Kolkata"
+scaling_schedules = [
+  { name = "weekday-office-hours", schedule = "cron(30 8 ? * MON-FRI *)", min_tasks = 1, max_tasks = 2 },
+  { name = "after-hours", schedule = "cron(0 19 ? * MON-FRI *)", min_tasks = 0, max_tasks = 0 },
+]
+
+# -------------------------
+# Auth: Cognito users only until the IdP test app is registered
+# -------------------------
+identity_provider_type = "NONE"
+ui_callback_urls       = ["http://localhost:8501/"]
+
+# -------------------------
+# Query behaviour
+# -------------------------
+mcp_server_url        = ""
+rate_limit_per_minute = 30
+eval_sample_rate      = 0.10

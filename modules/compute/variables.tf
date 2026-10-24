@@ -13,25 +13,37 @@ variable "stage" {
   type        = string
 }
 
-variable "aws_region" {
-  description = "AWS region for all resources"
-  type        = string
-  default     = "us-east-1"
-}
-
 # -------------------------
 # Lambda Configuration
 # -------------------------
 variable "lambda_memory_size" {
-  description = "Memory size for Lambda functions in MB"
+  description = "Memory size for the document processor in MB"
   type        = number
-  default     = 256
+  default     = 1024
 }
 
-variable "lambda_timeout" {
-  description = "Timeout for Lambda functions in seconds"
+variable "ingestion_timeout" {
+  description = "Timeout for the document processor in seconds (queue visibility is 6x this)"
   type        = number
-  default     = 30
+  default     = 300
+}
+
+variable "ingestion_batch_size" {
+  description = "SQS messages per Lambda invocation"
+  type        = number
+  default     = 5
+}
+
+variable "ingestion_max_concurrency" {
+  description = "Maximum concurrent document processor invocations from SQS"
+  type        = number
+  default     = 10
+}
+
+variable "ingestion_max_receive_count" {
+  description = "Attempts before a message moves to the DLQ"
+  type        = number
+  default     = 3
 }
 
 # -------------------------
@@ -42,8 +54,18 @@ variable "documents_bucket" {
   type        = string
 }
 
+variable "documents_bucket_arn" {
+  description = "ARN of the S3 bucket for documents"
+  type        = string
+}
+
 variable "metadata_table" {
   description = "Name of the DynamoDB table for metadata"
+  type        = string
+}
+
+variable "metadata_table_arn" {
+  description = "ARN of the DynamoDB table for metadata"
   type        = string
 }
 
@@ -53,22 +75,39 @@ variable "metadata_table" {
 variable "vpc_subnet_ids" {
   description = "List of subnet IDs for Lambda functions"
   type        = list(string)
-  default     = []
 }
 
 variable "lambda_security_group_id" {
   description = "ID of the security group for Lambda functions"
   type        = string
-  default     = ""
 }
 
 # -------------------------
-# Secrets and Lambda Code
+# Database
 # -------------------------
-variable "db_secret_arn" {
-  description = "ARN of the Secrets Manager secret containing database credentials"
+variable "db_write_host" {
+  description = "Host for application writes (RDS Proxy or cluster writer endpoint)"
   type        = string
-  default     = ""
+}
+
+variable "db_cluster_endpoint" {
+  description = "Aurora writer endpoint used by db_init"
+  type        = string
+}
+
+variable "db_name" {
+  description = "Database name"
+  type        = string
+}
+
+variable "db_app_secret_arn" {
+  description = "ARN of the application database credentials secret"
+  type        = string
+}
+
+variable "db_master_secret_arn" {
+  description = "ARN of the RDS-managed master credentials secret"
+  type        = string
 }
 
 variable "lambda_code_bucket" {
@@ -77,18 +116,18 @@ variable "lambda_code_bucket" {
 }
 
 # -------------------------
-# Gemini Configuration
+# Bedrock Configuration
 # -------------------------
-variable "gemini_embedding_model" {
-  description = "Gemini Embedding model to use"
+variable "embedding_model_id" {
+  description = "Bedrock embedding model"
   type        = string
-  default     = "text-embedding-004"
+  default     = "amazon.titan-embed-text-v2:0"
 }
 
-variable "gemini_api_key" {
-  description = "Google's Gemini API Key"
-  type        = string
-  default     = "PLACE_HOLDER"
+variable "embedding_dimensions" {
+  description = "Embedding vector size (must match the pgvector column)"
+  type        = number
+  default     = 1024
 }
 
 variable "max_retries" {
@@ -101,40 +140,4 @@ variable "retry_delay" {
   description = "Retry Delay"
   type        = number
   default     = 10
-}
-
-variable "cognito_user_pool_id" {
-  description = "ID of the Cognito User Pool"
-  type        = string
-  default     = ""
-}
-
-variable "cognito_app_client_id" {
-  description = "ID of the Cognito App Client"
-  type        = string
-  default     = ""
-}
-
-variable "cognito_user_pool_arn" {
-  description = "ARN of the Cognito User Pool"
-  type        = string
-  default     = ""
-}
-
-variable "mcp_timeout" {
-  description = "Timeout for MCP requests in seconds"
-  type        = number
-  default     = 60
-}
-
-variable "rag_confidence_threshold" {
-  description = "Confidence threshold for traditional RAG (0.0-1.0)"
-  type        = number
-  default     = 0.7
-}
-
-variable "min_context_length" {
-  description = "Minimum context length required from traditional RAG"
-  type        = number
-  default     = 100
 }

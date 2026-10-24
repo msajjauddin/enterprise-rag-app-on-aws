@@ -1,0 +1,8 @@
+{"id": "travel-01", "question": "How far in advance do I need to book flights?", "expected_sources": ["eval-travel-policy.md"], "reference": "At least 14 days before departure, through the corporate travel portal."}
+{"id": "travel-02", "question": "What is the per diem for international trips?", "expected_sources": ["eval-travel-policy.md"], "reference": "85 USD per day for international travel."}
+{"id": "travel-03", "question": "When do I have to submit my expense claim and what receipts are needed?", "expected_sources": ["eval-travel-policy.md"], "reference": "Within 30 days of returning, with itemised receipts for any expense above 25 USD."}
+{"id": "leave-01", "question": "How many days of annual leave do full-time employees get?", "expected_sources": ["eval-leave-policy.md"], "reference": "24 days of paid annual leave per calendar year."}
+{"id": "leave-02", "question": "Can I carry over unused vacation days?", "expected_sources": ["eval-leave-policy.md"], "reference": "Up to 5 unused days can be carried over and must be used by 31 March."}
+{"id": "leave-03", "question": "When do I need a doctor's note for sick leave?", "expected_sources": ["eval-leave-policy.md"], "reference": "For absences longer than 2 consecutive working days."}
+{"id": "leave-04", "question": "How long is parental leave for a secondary caregiver?", "expected_sources": ["eval-leave-policy.md"], "reference": "4 weeks."}
+{"id": "negative-01", "question": "What is the company's policy on bringing pets to the office?", "expected_sources": [], "reference": "The documents do not cover this; the assistant should say it doesn't know rather than invent a policy."}

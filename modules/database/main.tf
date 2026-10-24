@@ -1,17 +1,17 @@
 # ================================
 # Database Module for RAG System
 # ================================
-# Sets up PostgreSQL RDS with Secrets Manager integration, parameter group, and conditional import logic
+# Aurora PostgreSQL + pgvector. Prod runs a provisioned writer and one reader that
+# doubles as the failover target, fronted by RDS Proxy. Non-prod runs Serverless v2
+# with min capacity 0 (auto-pause) and no reader.
 
 locals {
-  name = "${var.project_name}-${var.stage}"
-  create_db = !var.import_db
-  
-  # Define fallback values for DB endpoints and connection info
-  db_endpoint_fallback = "${local.name}-postgres.${var.aws_region}.rds.amazonaws.com"
-  db_port_fallback = 5432
-  
-  # We'll use these for conditional logic
+  name       = "${var.project_name}-${var.stage}"
+  serverless = var.instance_class == "db.serverless"
+
+  # Writer + optional readers. Promotion tier 1 makes the reader the preferred failover target.
+  instances = { for i in range(1 + var.reader_count) : (i == 0 ? "writer" : "reader-${i}") => i }
+
   common_tags = {
     Project     = var.project_name
     Environment = var.stage
@@ -19,158 +19,255 @@ locals {
   }
 }
 
-# ============================================================================
-# Get the actual RDS endpoint or use the default postgres endpoint as fallback
-# ============================================================================
-
-data "aws_db_instance" "postgres" {
-  count = var.import_db ? 1 : 0
-  db_instance_identifier = "${local.name}-postgres"
-}
-
-# Generate a random password for the database
-resource "random_password" "postgres_password" {
-  length           = 16
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
-  
-  # Only regenerate password when explicitly told to
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-# ====================================================================
-# Use a null_resource to check if the DB exists instead of data source
-# ====================================================================
-
-resource "null_resource" "db_existence_check" {
-  count = var.import_db ? 1 : 0
-  
-  # This will run during plan phase to check if the DB exists
-  provisioner "local-exec" {
-    command = <<EOF
-      aws rds describe-db-instances --db-instance-identifier ${local.name}-postgres > /dev/null 2>&1
-      if [ $? -eq 0 ]; then
-        echo "DB exists"
-        exit 0
-      else
-        echo "DB does not exist, but import_db is set to true. Setting create_db to true."
-        exit 0  # Continue anyway
-      fi
-    EOF
-  }
-}
-
-# ================================================================================
-# Instead of data source, create a "dummy" resource to hold DB info when importing
-# This is never actually created, just used to model the existing DB
-# ================================================================================
-
-resource "aws_db_instance" "dummy_for_import" {
-  count = 0  # Never create this
-
-  identifier             = "${local.name}-postgres"
-  engine                 = "postgres"
-  instance_class         = var.db_instance_class
-  allocated_storage      = var.db_allocated_storage
-  skip_final_snapshot    = true
-  apply_immediately      = true
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 # ==================================================================
-# DB Parameter Group for PostgreSQL with RAG-specific settings
+# Cluster parameter group
 # ==================================================================
 
-resource "aws_db_parameter_group" "postgres" {
-  name        = "${local.name}-postgres-params"
-  family      = "postgres${var.db_engine_version}"
-  description = "Parameter group for ${local.name} PostgreSQL database"
+resource "aws_rds_cluster_parameter_group" "main" {
+  name        = "${local.name}-aurora-pg-params"
+  family      = "aurora-postgresql${split(".", var.engine_version)[0]}"
+  description = "Cluster parameters for ${local.name}"
 
-  # Add parameters with proper apply_method
   parameter {
-    name  = "shared_preload_libraries"
-    value = "pg_stat_statements,auto_explain"
-    apply_method = "pending-reboot"  # This is critical - static parameters require a reboot
+    name         = "shared_preload_libraries"
+    value        = "pg_stat_statements,auto_explain"
+    apply_method = "pending-reboot"
   }
-  
-  tags = {
-    Name = "${local.name}-postgres-params"
+
+  # Clients must connect with sslmode=require
+  parameter {
+    name  = "rds.force_ssl"
+    value = "1"
   }
-  
+
+  tags = local.common_tags
+
   lifecycle {
     create_before_destroy = true
-    prevent_destroy       = true
   }
 }
 
 # ==================================================================
-# Create RDS PostgreSQL instance only if it doesn't already exist
+# Aurora cluster
 # ==================================================================
 
-resource "aws_db_instance" "postgres" {
-  # Only create if import_db is false
-  count = local.create_db ? 1 : 0
-  
-  identifier             = "${local.name}-postgres"
-  engine                 = "postgres"
-  engine_version         = var.db_engine_version
-  instance_class         = var.db_instance_class
-  allocated_storage      = var.db_allocated_storage
-  storage_type           = "gp3"
-  db_name                = var.db_name
-  username               = var.db_username
-  password               = random_password.postgres_password.result
-  db_subnet_group_name   = var.db_subnet_group_name
-  vpc_security_group_ids = [var.db_security_group_id]
-  skip_final_snapshot    = var.skip_final_snapshot
-  apply_immediately      = true
-  backup_retention_period = 7
-  parameter_group_name   = aws_db_parameter_group.postgres.name
-  
-  # Performance insights
-  performance_insights_enabled = true
-  performance_insights_retention_period = 7
-  
-  tags = {
-    Name = "${local.name}-postgres"
-    Environment = var.stage
+resource "aws_rds_cluster" "main" {
+  cluster_identifier = "${local.name}-aurora"
+  engine             = "aurora-postgresql"
+  engine_mode        = "provisioned"
+  engine_version     = var.engine_version
+  database_name      = var.db_name
+  master_username    = var.db_username
+
+  # RDS creates and rotates the master password in Secrets Manager
+  manage_master_user_password = true
+
+  db_subnet_group_name            = var.db_subnet_group_name
+  vpc_security_group_ids          = [var.db_security_group_id]
+  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.main.name
+
+  storage_encrypted         = true
+  backup_retention_period   = var.backup_retention_days
+  preferred_backup_window   = "18:00-19:00"
+  copy_tags_to_snapshot     = true
+  deletion_protection       = var.deletion_protection
+  skip_final_snapshot       = !var.deletion_protection
+  final_snapshot_identifier = var.deletion_protection ? "${local.name}-aurora-final" : null
+
+  enabled_cloudwatch_logs_exports = ["postgresql"]
+
+  dynamic "serverlessv2_scaling_configuration" {
+    for_each = local.serverless ? [1] : []
+    content {
+      min_capacity             = var.serverless_min_acu
+      max_capacity             = var.serverless_max_acu
+      seconds_until_auto_pause = var.serverless_min_acu == 0 ? var.auto_pause_seconds : null
+    }
   }
-  
-  # Handle existing instances
-  lifecycle {
-    prevent_destroy = true
-    # Prevent password changes after creation
-    ignore_changes = [password]
-  }
+
+  tags = merge(
+    { Name = "${local.name}-aurora" },
+    local.common_tags
+  )
 }
 
-# ==========================================================
-# Store the database credentials in AWS Secrets Manager
-# ==========================================================
+resource "aws_rds_cluster_instance" "main" {
+  for_each = local.instances
 
-resource "aws_secretsmanager_secret" "db_credentials" {
-  name        = "${local.name}-db-credentials"
-  description = "Database credentials for ${local.name}"
-  
-  tags = {
-    Name = "${local.name}-db-credentials"
-    Environment = var.stage
-  }
+  identifier         = "${local.name}-aurora-${each.key}"
+  cluster_identifier = aws_rds_cluster.main.id
+  instance_class     = var.instance_class
+  engine             = aws_rds_cluster.main.engine
+  engine_version     = aws_rds_cluster.main.engine_version
+
+  db_subnet_group_name = var.db_subnet_group_name
+  promotion_tier       = each.value == 0 ? 0 : 1
+
+  # Spread writer and reader across AZs so the reader is a real standby
+  availability_zone = length(var.availability_zones) > 0 ? var.availability_zones[each.value % length(var.availability_zones)] : null
+
+  performance_insights_enabled = !local.serverless || var.serverless_min_acu > 0
+  auto_minor_version_upgrade   = true
+
+  tags = merge(
+    { Name = "${local.name}-aurora-${each.key}" },
+    local.common_tags
+  )
 }
 
-resource "aws_secretsmanager_secret_version" "db_credentials" {
-  secret_id = aws_secretsmanager_secret.db_credentials.id
+# ==================================================================
+# Application database user
+# ==================================================================
+# The query service and ingestion Lambda connect as a least-privileged role.
+# db_init creates it with this password using the master credentials.
+
+resource "random_password" "app" {
+  length           = 32
+  special          = true
+  override_special = "!#%*()-_=+[]{}<>:?"
+}
+
+resource "aws_secretsmanager_secret" "app_credentials" {
+  name        = "${local.name}-db-app-credentials"
+  description = "Application database credentials for ${local.name}"
+
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "app_credentials" {
+  secret_id = aws_secretsmanager_secret.app_credentials.id
   secret_string = jsonencode({
-    username = var.db_username
-    password = random_password.postgres_password.result
-    engine   = "postgres"
-    host     = local.create_db ? (length(aws_db_instance.postgres) > 0 ? aws_db_instance.postgres[0].address : data.aws_db_instance.postgres[0].address) : data.aws_db_instance.postgres[0].address
-    port     = local.create_db ? (length(aws_db_instance.postgres) > 0 ? aws_db_instance.postgres[0].port : data.aws_db_instance.postgres[0].port) : data.aws_db_instance.postgres[0].port
-    dbname   = var.db_name
+    username = var.app_db_username
+    password = random_password.app.result
   })
+}
+
+# ==================================================================
+# RDS Proxy (prod)
+# ==================================================================
+
+resource "aws_iam_role" "proxy" {
+  count = var.enable_rds_proxy ? 1 : 0
+  name  = "${local.name}-rds-proxy-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "rds.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "proxy" {
+  count = var.enable_rds_proxy ? 1 : 0
+  name  = "read-db-secrets"
+  role  = aws_iam_role.proxy[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = ["secretsmanager:GetSecretValue"],
+      Resource = [aws_secretsmanager_secret.app_credentials.arn]
+    }]
+  })
+}
+
+resource "aws_db_proxy" "main" {
+  count = var.enable_rds_proxy ? 1 : 0
+
+  name                   = "${local.name}-proxy"
+  engine_family          = "POSTGRESQL"
+  role_arn               = aws_iam_role.proxy[0].arn
+  vpc_subnet_ids         = var.proxy_subnet_ids
+  vpc_security_group_ids = [var.proxy_security_group_id]
+  require_tls            = true
+  idle_client_timeout    = 1800
+
+  auth {
+    auth_scheme = "SECRETS"
+    iam_auth    = "DISABLED"
+    secret_arn  = aws_secretsmanager_secret.app_credentials.arn
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_db_proxy_default_target_group" "main" {
+  count         = var.enable_rds_proxy ? 1 : 0
+  db_proxy_name = aws_db_proxy.main[0].name
+
+  connection_pool_config {
+    max_connections_percent      = 90
+    max_idle_connections_percent = 30
+    connection_borrow_timeout    = 30
+  }
+}
+
+resource "aws_db_proxy_target" "main" {
+  count                 = var.enable_rds_proxy ? 1 : 0
+  db_proxy_name         = aws_db_proxy.main[0].name
+  target_group_name     = aws_db_proxy_default_target_group.main[0].name
+  db_cluster_identifier = aws_rds_cluster.main.cluster_identifier
+
+  depends_on = [aws_rds_cluster_instance.main]
+}
+
+# Read-only endpoint routes to the reader; vector search uses it
+resource "aws_db_proxy_endpoint" "read_only" {
+  count                  = var.enable_rds_proxy && var.reader_count > 0 ? 1 : 0
+  db_proxy_name          = aws_db_proxy.main[0].name
+  db_proxy_endpoint_name = "${local.name}-proxy-ro"
+  vpc_subnet_ids         = var.proxy_subnet_ids
+  vpc_security_group_ids = [var.proxy_security_group_id]
+  target_role            = "READ_ONLY"
+
+  tags = local.common_tags
+}
+
+locals {
+  write_host = var.enable_rds_proxy ? aws_db_proxy.main[0].endpoint : aws_rds_cluster.main.endpoint
+  read_host = (
+    var.enable_rds_proxy
+    ? (var.reader_count > 0 ? aws_db_proxy_endpoint.read_only[0].endpoint : aws_db_proxy.main[0].endpoint)
+    : (var.reader_count > 0 ? aws_rds_cluster.main.reader_endpoint : aws_rds_cluster.main.endpoint)
+  )
+}
+
+# ==================================================================
+# Pre-upgrade RDS instance
+# ==================================================================
+# The single-AZ RDS PostgreSQL instance is replaced by Aurora. Terraform stops
+# managing it (and its credentials secret) without deleting it, so its data stays
+# available until someone takes a final snapshot and deletes it by hand:
+#   aws rds delete-db-instance --db-instance-identifier <project>-<stage>-postgres \
+#     --final-db-snapshot-identifier <project>-<stage>-postgres-final
+# Remove these blocks once the old instance is gone in every environment.
+
+removed {
+  from = aws_db_instance.postgres
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_secretsmanager_secret.db_credentials
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_db_parameter_group.postgres
+
+  lifecycle {
+    destroy = false
+  }
 }

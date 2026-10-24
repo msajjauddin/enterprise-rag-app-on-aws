@@ -17,3 +17,12 @@ output "metadata_table_arn" {
   description = "ARN of the DynamoDB metadata table"
   value       = aws_dynamodb_table.metadata.arn
 }
+output "chat_history_table_name" {
+  description = "Name of the DynamoDB chat history table"
+  value       = aws_dynamodb_table.chat_history.name
+}
+
+output "chat_history_table_arn" {
+  description = "ARN of the DynamoDB chat history table"
+  value       = aws_dynamodb_table.chat_history.arn
+}

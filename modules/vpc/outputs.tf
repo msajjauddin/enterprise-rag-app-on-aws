@@ -51,3 +51,27 @@ output "vpc_cidr" {
   description = "CIDR block of the VPC"
   value       = aws_vpc.main.cidr_block
 }
+output "alb_security_group_id" {
+  description = "ID of the internal ALB security group"
+  value       = aws_security_group.alb.id
+}
+
+output "ecs_security_group_id" {
+  description = "ID of the Fargate task security group"
+  value       = aws_security_group.ecs.id
+}
+
+output "rds_proxy_security_group_id" {
+  description = "ID of the RDS Proxy security group"
+  value       = aws_security_group.rds_proxy.id
+}
+
+output "cache_security_group_id" {
+  description = "ID of the ElastiCache security group"
+  value       = aws_security_group.cache.id
+}
+
+output "cache_subnet_group_name" {
+  description = "Name of the ElastiCache subnet group"
+  value       = aws_elasticache_subnet_group.main.name
+}

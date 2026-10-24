@@ -1,4 +1,6 @@
 #!/bin/bash
+# NOTE: written for the pre-upgrade architecture (API Gateway, Lambda query processor, RDS).
+# It does not yet remove ECS, Aurora, RDS Proxy, ElastiCache, CloudFront or SQS resources.
 
 # ============================================================
 # AWS RAG Application Cleanup Script

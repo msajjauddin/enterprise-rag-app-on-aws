@@ -31,7 +31,7 @@ os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
 # Mock response for Secrets Manager
 mock_secret_response = MagicMock()
-mock_secret_response.return_value = {"SecretString": '{"GEMINI_API_KEY": "test-api-key"}'}
+mock_secret_response.return_value = {"SecretString": '{"username": "rag_app", "password": "test-password"}'}
 
 # Mock boto3
 mock_boto3 = MagicMock()
@@ -41,16 +41,14 @@ mock_client.get_secret_value = mock_secret_response
 mock_boto3.client.return_value = mock_client
 mock_boto3.resource.return_value = mock_resource
 
-# Mock Google Gemini
-mock_google = MagicMock()
-mock_genai = MagicMock()
-mock_genai_types = MagicMock()
-mock_genai_client = MagicMock()
-
 # Mock PostgreSQL
 mock_psycopg2 = MagicMock()
 mock_psycopg2_extensions = MagicMock()
 mock_psycopg2_extensions.ISOLATION_LEVEL_AUTOCOMMIT = 0
+mock_psycopg2_extras = MagicMock()
+mock_psycopg2_sql = MagicMock()
+mock_psycopg2.extras = mock_psycopg2_extras
+mock_psycopg2.sql = mock_psycopg2_sql
 
 # Mock LangChain
 mock_langchain = MagicMock()
@@ -79,9 +77,8 @@ sys.modules['botocore'] = MagicMock()
 sys.modules['botocore.exceptions'] = MagicMock()
 sys.modules['psycopg2'] = mock_psycopg2
 sys.modules['psycopg2.extensions'] = mock_psycopg2_extensions
-sys.modules['google'] = mock_google
-sys.modules['google.genai'] = mock_genai
-sys.modules['google.genai.types'] = mock_genai_types
+sys.modules['psycopg2.extras'] = mock_psycopg2_extras
+sys.modules['psycopg2.sql'] = mock_psycopg2_sql
 sys.modules['langchain'] = mock_langchain
 sys.modules['langchain.document_loaders'] = mock_document_loaders
 sys.modules['langchain.text_splitter'] = mock_text_splitter

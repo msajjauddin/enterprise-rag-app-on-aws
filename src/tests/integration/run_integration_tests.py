@@ -83,41 +83,58 @@ def write_junit_xml(tests, output_file="integration-test-results.xml"):
     log(f"Total: {total}, Errors: {errors}, Failures: {failures}, Skipped: {skipped}")
 
 def test_api_health():
-    """Test that the API is healthy."""
+    """Test that the query API is reachable through CloudFront and healthy."""
     test_result = {
         "name": "test_api_health",
         "status": "passed"
     }
-    
+
     try:
-        log(f"Testing API health at: {API_ENDPOINT}")
-        
-        # Use the auth endpoint with 'healthcheck' action which doesn't require authentication
-        payload = {"action": "healthcheck"}
-        response = requests.post(f"{API_ENDPOINT}/auth", json=payload, timeout=10)
+        log(f"Testing API health at: {API_ENDPOINT}/health")
+        response = requests.get(f"{API_ENDPOINT}/health", timeout=10)
         log(f"Health check status code: {response.status_code}")
-        
+
         if response.status_code != 200:
             test_result["status"] = "failure"
             test_result["message"] = f"Health check failed with status {response.status_code}"
             test_result["details"] = response.text
             return test_result
-        
+
         try:
-            response_json = response.json()
-            log(f"Health check response: {json.dumps(response_json)}")
-                
+            log(f"Health check response: {json.dumps(response.json())}")
         except json.JSONDecodeError:
             test_result["status"] = "failure"
             test_result["message"] = "Health check response is not valid JSON"
             test_result["details"] = response.text
             return test_result
-            
+
     except Exception as e:
         test_result["status"] = "error"
         test_result["message"] = f"Health check error: {str(e)}"
         test_result["details"] = str(e)
-    
+
+    return test_result
+
+
+def test_query_requires_auth():
+    """Test that /query rejects requests without a valid token."""
+    test_result = {
+        "name": "test_query_requires_auth",
+        "status": "passed"
+    }
+
+    try:
+        response = requests.post(f"{API_ENDPOINT}/query", json={"question": "hello"}, timeout=10)
+        log(f"Unauthenticated query status code: {response.status_code}")
+        if response.status_code != 401:
+            test_result["status"] = "failure"
+            test_result["message"] = f"Expected 401 without a token, got {response.status_code}"
+            test_result["details"] = response.text
+    except Exception as e:
+        test_result["status"] = "error"
+        test_result["message"] = f"Auth check error: {str(e)}"
+        test_result["details"] = str(e)
+
     return test_result
 
 def main():
@@ -134,16 +151,12 @@ def main():
     
     log(f"Running integration tests against API endpoint: {API_ENDPOINT}")
     
-    # Run a simple health check test
-    tests = []
-    health_result = test_api_health()
-    tests.append(health_result)
-    
+    tests = [test_api_health(), test_query_requires_auth()]
+
     # Write the test results to a JUnit XML file
     write_junit_xml(tests)
-    
-    # Return success if the health check passed
-    return 0 if health_result["status"] == "passed" else 1
+
+    return 0 if all(t["status"] == "passed" for t in tests) else 1
 
 if __name__ == "__main__":
     sys.exit(main())

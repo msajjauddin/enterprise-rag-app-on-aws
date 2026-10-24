@@ -169,7 +169,7 @@ resource "aws_route_table_association" "private" {
 
 resource "aws_iam_role" "flow_logs" {
   name = "${var.project_name}-${var.stage}-flow-logs-role"
-  
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -241,12 +241,13 @@ resource "aws_security_group" "bastion" {
   )
 }
 
+# Ingestion Lambdas (document processor, db init)
 resource "aws_security_group" "lambda" {
   name        = "${local.name}-lambda-sg"
   description = "Security group for Lambda functions"
   vpc_id      = aws_vpc.main.id
 
-  # Allow all outbound traffic (including HTTP/HTTPS for MCP)
+  # Outbound to AWS endpoints, the database tier and the internet via NAT
   egress {
     from_port   = 0
     to_port     = 0
@@ -259,18 +260,52 @@ resource "aws_security_group" "lambda" {
   }
 }
 
-resource "aws_security_group" "database" {
-  name        = "${local.name}-db-sg"
-  description = "Security group for PostgreSQL RDS"
+# Internal ALB in front of the query service. Only CloudFront (VPC origin) may reach it.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
+resource "aws_security_group" "alb" {
+  name        = "${local.name}-alb-sg"
+  description = "Internal ALB, reachable from CloudFront only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port       = 5432
-    to_port         = 5432
+    description     = "HTTP from CloudFront VPC origin"
+    from_port       = 80
+    to_port         = 80
     protocol        = "tcp"
-    security_groups = [aws_security_group.lambda.id]
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   }
 
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(
+    { Name = "${local.name}-alb-sg" },
+    local.common_tags
+  )
+}
+
+# Fargate tasks running the FastAPI query service
+resource "aws_security_group" "ecs" {
+  name        = "${local.name}-ecs-sg"
+  description = "Fargate query service tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "App port from the ALB"
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  # Outbound to AWS endpoints, the database tier and the internet via NAT (MCP web search, ECR, JWKS)
   egress {
     from_port   = 0
     to_port     = 0
@@ -278,9 +313,100 @@ resource "aws_security_group" "database" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  tags = merge(
+    { Name = "${local.name}-ecs-sg" },
+    local.common_tags
+  )
+}
+
+resource "aws_security_group" "rds_proxy" {
+  name        = "${local.name}-rds-proxy-sg"
+  description = "RDS Proxy, reachable from Fargate and Lambda only"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id, aws_security_group.lambda.id]
+  }
+
+  egress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(
+    { Name = "${local.name}-rds-proxy-sg" },
+    local.common_tags
+  )
+}
+
+resource "aws_security_group" "database" {
+  name        = "${local.name}-db-sg"
+  description = "Security group for Aurora PostgreSQL"
+  vpc_id      = aws_vpc.main.id
+
+  # Prod connects only through RDS Proxy. Non-prod has no proxy, so the app
+  # security groups connect directly (enable_rds_proxy = false).
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = var.enable_rds_proxy ? [aws_security_group.rds_proxy.id] : [aws_security_group.rds_proxy.id, aws_security_group.ecs.id, aws_security_group.lambda.id]
+  }
+
+  # db_init Lambda always connects directly to the writer to run migrations
+  ingress {
+    description     = "Schema migrations from Lambda"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda.id]
+  }
+
   tags = {
     Name = "${local.name}-db-sg"
   }
+}
+
+resource "aws_security_group" "cache" {
+  name        = "${local.name}-cache-sg"
+  description = "ElastiCache (Valkey), reachable from Fargate only"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  tags = merge(
+    { Name = "${local.name}-cache-sg" },
+    local.common_tags
+  )
+}
+
+resource "aws_security_group" "endpoints" {
+  name        = "${local.name}-endpoints-sg"
+  description = "Interface VPC endpoints"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTPS from inside the VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(
+    { Name = "${local.name}-endpoints-sg" },
+    local.common_tags
+  )
 }
 
 # =========================
@@ -321,4 +447,26 @@ resource "aws_vpc_endpoint" "dynamodb" {
   tags = {
     Name = "${local.name}-dynamodb-endpoint"
   }
+}
+
+# Interface endpoints keep Bedrock, Secrets Manager and CloudWatch Logs traffic on the AWS network
+resource "aws_vpc_endpoint" "interface" {
+  for_each = toset(var.interface_endpoints)
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${var.aws_region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.endpoints.id]
+  private_dns_enabled = true
+
+  tags = merge(
+    { Name = "${local.name}-${each.value}-endpoint" },
+    local.common_tags
+  )
+}
+
+resource "aws_elasticache_subnet_group" "main" {
+  name       = "${local.name}-cache-subnet-group"
+  subnet_ids = aws_subnet.database[*].id
 }
