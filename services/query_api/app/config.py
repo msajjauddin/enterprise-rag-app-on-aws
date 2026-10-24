@@ -50,14 +50,14 @@ class Settings:
     embedding_model_id: str = os.environ.get("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
     embedding_dimensions: int = _int("EMBEDDING_DIMENSIONS", "1024")
     rerank_model_id: str = os.environ.get("RERANK_MODEL_ID", "cohere.rerank-v3-5:0")
-    generation_model_id: str = os.environ.get("GENERATION_MODEL_ID", "anthropic.claude-opus-5-5")
-    fallback_model_id: str = os.environ.get("FALLBACK_MODEL_ID", "anthropic.claude-opus-4-8")
-    judge_model_id: str = os.environ.get("JUDGE_MODEL_ID", "anthropic.claude-haiku-5-5")
+    # OpenAI models on bedrock-runtime need a cross-Region inference profile ID
+    generation_model_id: str = os.environ.get("GENERATION_MODEL_ID", "us.openai.gpt-6-luna")
+    judge_model_id: str = os.environ.get("JUDGE_MODEL_ID", "us.openai.gpt-6-luna")
     generation_effort: str = os.environ.get("GENERATION_EFFORT", "low")
     generation_max_tokens: int = _int("GENERATION_MAX_TOKENS", "16000")
     # USD per million tokens, for the cost/query metric. Set to your Bedrock prices.
-    price_input_per_mtok: float = _float("PRICE_INPUT_PER_MTOK", "4.00")
-    price_output_per_mtok: float = _float("PRICE_OUTPUT_PER_MTOK", "20.00")
+    price_input_per_mtok: float = _float("PRICE_INPUT_PER_MTOK", "0.11")
+    price_output_per_mtok: float = _float("PRICE_OUTPUT_PER_MTOK", "0.55")
 
     guardrail_id: str = os.environ.get("GUARDRAIL_ID", "")
     guardrail_version: str = os.environ.get("GUARDRAIL_VERSION", "DRAFT")

@@ -39,7 +39,7 @@ def client(monkeypatch, calls):
         calls["generated"] += 1
         for token in ["You get ", "25 days ", "[handbook.pdf]."]:
             yield token
-        usage.input_tokens, usage.output_tokens, usage.model = 1200, 40, "anthropic.claude-opus-5-5"
+        usage.input_tokens, usage.output_tokens, usage.model = 1200, 40, "us.openai.gpt-6-luna"
 
     monkeypatch.setattr(retrieval, "hybrid_search", search)
     monkeypatch.setattr(bedrock, "stream_answer", stream_answer)

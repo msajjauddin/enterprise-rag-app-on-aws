@@ -1,5 +1,5 @@
 """
-Asynchronous, sampled online evaluation. A small Claude model judges a fraction of
+Asynchronous, sampled online evaluation. A GPT model on Bedrock judges a fraction of
 answers for faithfulness to the retrieved context and relevance to the question,
 after the response has been sent, so it never adds user-facing latency.
 """

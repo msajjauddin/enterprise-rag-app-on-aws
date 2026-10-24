@@ -16,6 +16,8 @@ locals {
     ManagedBy   = "Terraform"
   }
 
+  llm_profile_ids = distinct([var.generation_model_id, var.judge_model_id])
+
   # ADOT collector: OTLP from the app -> X-Ray
   otel_config = <<-YAML
     receivers:
@@ -129,10 +131,16 @@ resource "aws_iam_role_policy" "task" {
         Resource = var.guardrail_arn
       },
       {
-        Sid      = "ClaudeOnBedrock",
-        Effect   = "Allow",
-        Action   = ["bedrock-mantle:CreateInference"],
-        Resource = "*"
+        # OpenAI models on bedrock-runtime: the cross-Region inference profile, the
+        # model in each destination Region, and the account's default project
+        Sid    = "GenerationModels",
+        Effect = "Allow",
+        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+        Resource = concat(
+          [for id in local.llm_profile_ids : "arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${id}"],
+          [for id in local.llm_profile_ids : "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${replace(id, "/^(us|global)\\./", "")}"],
+          ["arn:${data.aws_partition.current.partition}:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:project/default"]
+        )
       },
       {
         Sid    = "ChatHistoryAndMetadata",

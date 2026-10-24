@@ -4,7 +4,7 @@ Golden-set evaluation gate, run by CI after each deployment.
 1. Seeds the fixture documents in evals/documents/ (shared with the 'eval' group only)
    and waits until ingestion has processed them.
 2. Asks every golden question through the deployed API as the CI evaluation client.
-3. Scores retrieval (expected source cited) and answer correctness (Claude judge on
+3. Scores retrieval (expected source cited) and answer correctness (GPT judge on
    Bedrock against the reference answer).
 4. Exits non-zero when a score is below its threshold, which fails the pipeline.
 
@@ -21,7 +21,8 @@ from pathlib import Path
 
 import boto3
 import requests
-from anthropic import AnthropicBedrockMantle
+from openai import OpenAI
+from openai.providers import bedrock as bedrock_provider
 
 HERE = Path(__file__).parent
 API_ENDPOINT = os.environ["API_ENDPOINT"].rstrip("/")
@@ -29,7 +30,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 SECRET_ARN = os.environ["EVAL_CLIENT_SECRET_ARN"]
 DOCUMENT_BUCKET = os.environ["DOCUMENT_BUCKET"]
 METADATA_TABLE = os.environ["METADATA_TABLE"]
-JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "anthropic.claude-haiku-5-5")
+JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "us.openai.gpt-6-luna")
 MIN_RETRIEVAL_HIT_RATE = float(os.environ.get("MIN_RETRIEVAL_HIT_RATE", "0.9"))
 MIN_CORRECTNESS = float(os.environ.get("MIN_CORRECTNESS", "0.8"))
 INGESTION_TIMEOUT_S = int(os.environ.get("INGESTION_TIMEOUT_S", "600"))
@@ -120,17 +121,18 @@ def ask(token: str, question: str) -> dict:
     raise RuntimeError("rate limited three times")
 
 
-def judge(client: AnthropicBedrockMantle, question: str, reference: str, answer: str) -> dict:
-    response = client.messages.create(
+def judge(client: OpenAI, question: str, reference: str, answer: str) -> dict:
+    response = client.responses.create(
         model=JUDGE_MODEL_ID,
-        max_tokens=4000,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}},
-        messages=[{"role": "user", "content": JUDGE_PROMPT.format(
-            question=question, reference=reference, answer=answer)}],
+        input=JUDGE_PROMPT.format(question=question, reference=reference, answer=answer),
+        reasoning={"effort": "low"},
+        max_output_tokens=4000,
+        text={"format": {"type": "json_schema", "name": "grade", "schema": JUDGE_SCHEMA, "strict": True}},
+        store=False,
     )
-    if response.stop_reason == "refusal":
-        return {"correctness": 0.0, "reason": "judge refused"}
-    return json.loads(next(b.text for b in response.content if b.type == "text"))
+    if response.status != "completed" or not response.output_text:
+        return {"correctness": 0.0, "reason": f"judge did not complete ({response.status})"}
+    return json.loads(response.output_text)
 
 
 def main() -> int:
@@ -139,7 +141,7 @@ def main() -> int:
     seed_documents()
 
     token = get_token()
-    claude = AnthropicBedrockMantle(aws_region=AWS_REGION)
+    llm = OpenAI(provider=bedrock_provider(region=AWS_REGION, endpoint="runtime", api_key=None))
     results = []
 
     for case in golden:
@@ -147,7 +149,7 @@ def main() -> int:
         cited = {s["file_name"] for s in reply.get("sources", [])}
         expected = set(case["expected_sources"])
         retrieval_hit = expected <= cited if expected else None
-        grade = judge(claude, case["question"], case["reference"], reply["answer"])
+        grade = judge(llm, case["question"], case["reference"], reply["answer"])
         results.append({
             "id": case["id"],
             "retrieval_hit": retrieval_hit,

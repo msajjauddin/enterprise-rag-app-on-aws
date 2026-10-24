@@ -1,12 +1,11 @@
 """
 Amazon Bedrock clients.
 
-- Embeddings, rerank and Guardrails go through bedrock-runtime (IAM, VPC endpoint).
-- Answers and evaluation use Claude through the Messages-API Bedrock endpoint
-  (bedrock-mantle, IAM SigV4, VPC endpoint) via the Anthropic SDK's
-  AnthropicBedrockMantle client. A refusal on the primary model is retried on the
-  fallback model by the SDK's client-side fallback middleware (the server-side
-  `fallbacks` parameter isn't available on Bedrock).
+All calls go through the bedrock-runtime endpoint (IAM SigV4 with the task role,
+reached over the VPC interface endpoint):
+- Embeddings and rerank via InvokeModel, Guardrails via ApplyGuardrail (boto3).
+- Answers and evaluation use OpenAI GPT models through Bedrock's OpenAI-compatible
+  Responses API, called with the OpenAI SDK's Bedrock provider.
 """
 import json
 import logging
@@ -14,15 +13,16 @@ from dataclasses import dataclass
 from typing import Iterator, List, Optional
 
 import boto3
-from anthropic import AnthropicBedrockMantle, BetaRefusalFallbackMiddleware
 from botocore.config import Config
+from openai import OpenAI
+from openai.providers import bedrock as bedrock_provider
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
 _runtime = None
-_claude: Optional[AnthropicBedrockMantle] = None
+_llm: Optional[OpenAI] = None
 
 
 def runtime():
@@ -36,16 +36,16 @@ def runtime():
     return _runtime
 
 
-def claude() -> AnthropicBedrockMantle:
-    global _claude
-    if _claude is None:
-        _claude = AnthropicBedrockMantle(
-            aws_region=settings.aws_region,
+def llm() -> OpenAI:
+    global _llm
+    if _llm is None:
+        # api_key=None: sign requests with the AWS credential chain (ECS task role)
+        _llm = OpenAI(
+            provider=bedrock_provider(region=settings.aws_region, endpoint="runtime", api_key=None),
             max_retries=2,
             timeout=120.0,
-            middleware=[BetaRefusalFallbackMiddleware([{"model": settings.fallback_model_id}])],
         )
-    return _claude
+    return _llm
 
 
 # =========================
@@ -120,7 +120,7 @@ def apply_guardrail(text: str, source: str) -> GuardrailResult:
 
 
 # =========================
-# Claude
+# Generation (OpenAI GPT on Bedrock)
 # =========================
 
 SYSTEM_PROMPT = """You are the company's internal knowledge assistant. Answer employees' questions using the provided context.
@@ -156,32 +156,36 @@ class GenerationUsage:
 def stream_answer(question: str, chunks: List[dict], web_results: Optional[str],
                   usage: GenerationUsage) -> Iterator[str]:
     """Yield answer text deltas; fills `usage` when the stream completes."""
-    with claude().beta.messages.stream(
+    with llm().responses.stream(
         model=settings.generation_model_id,
-        max_tokens=settings.generation_max_tokens,
-        system=SYSTEM_PROMPT,
-        output_config={"effort": settings.generation_effort},
-        messages=[{"role": "user", "content": build_user_message(question, chunks, web_results)}],
+        instructions=SYSTEM_PROMPT,
+        input=build_user_message(question, chunks, web_results),
+        reasoning={"effort": settings.generation_effort},
+        max_output_tokens=settings.generation_max_tokens,
+        store=False,
     ) as stream:
-        for text in stream.text_stream:
-            yield text
-        final = stream.get_final_message()
+        for event in stream:
+            if event.type == "response.output_text.delta":
+                yield event.delta
+        final = stream.get_final_response()
 
-    usage.input_tokens = final.usage.input_tokens
-    usage.output_tokens = final.usage.output_tokens
+    if final.usage is not None:
+        usage.input_tokens = final.usage.input_tokens
+        usage.output_tokens = final.usage.output_tokens
     usage.model = final.model
-    usage.stop_reason = final.stop_reason or ""
+    usage.stop_reason = final.incomplete_details.reason if final.incomplete_details else (final.status or "")
 
 
 def judge(prompt: str, schema: dict) -> dict:
-    """Small-model structured judgement used by online evaluation."""
-    response = claude().messages.create(
+    """Structured judgement used by online evaluation."""
+    response = llm().responses.create(
         model=settings.judge_model_id,
-        max_tokens=4000,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
-        messages=[{"role": "user", "content": prompt}],
+        input=prompt,
+        reasoning={"effort": "low"},
+        max_output_tokens=4000,
+        text={"format": {"type": "json_schema", "name": "judgement", "schema": schema, "strict": True}},
+        store=False,
     )
-    if response.stop_reason == "refusal":
-        raise RuntimeError("judge refused")
-    text = next((b.text for b in response.content if b.type == "text"), "{}")
-    return json.loads(text)
+    if response.status != "completed" or not response.output_text:
+        raise RuntimeError(f"judge did not complete: {response.status}")
+    return json.loads(response.output_text)

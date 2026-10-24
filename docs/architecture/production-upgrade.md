@@ -94,7 +94,7 @@ flowchart TB
             dbB["Database subnet 10.0.5.0/24<br/>Aurora reader/standby · ElastiCache replica"]
         end
         gwe["Gateway endpoints (free)<br/>S3 · DynamoDB"]
-        ife["Interface endpoints<br/>bedrock-runtime · bedrock-mantle · secretsmanager · logs"]
+        ife["Interface endpoints<br/>bedrock-runtime · secretsmanager · logs"]
     end
 
     igw --- pubA
@@ -235,10 +235,10 @@ Hourly-billed resources that cost money with zero traffic. Verify with the AWS P
 | NAT gateways × 2 | ~$2.20 |
 | ElastiCache × 2 | ~$1.50 |
 | RDS Proxy | ~$1.45 |
-| Interface endpoints (4 × 2 AZs) | ~$1.90 |
+| Interface endpoints (3 × 2 AZs) | ~$1.45 |
 | ALB | ~$0.75 |
 | Public IPv4, Secrets, KMS, CloudWatch, storage | ~$1.00 |
-| **Total** | **~$25/day (~$75 for 3 idle days)** |
+| **Total** | **~$24/day (~$72 for 3 idle days)** |
 
 Bedrock, Lambda, SQS and CloudFront cost nothing when idle.
 
@@ -252,7 +252,7 @@ Where the code differs from, or fills in, the design above.
 |---|---|
 | UI | Streamlit is kept. It signs users in through the Cognito hosted UI (authorization code + PKCE), streams answers over SSE and uploads files straight to S3 with presigned POSTs. |
 | Edge | The ALB is internal and CloudFront reaches it through a **VPC origin**, so there is no public ALB endpoint to protect with a shared-secret header. |
-| Models | Answers: Claude Opus 5.5 (`anthropic.claude-opus-5-5`) through the Messages-API Bedrock endpoint (`bedrock-mantle`) at effort `low` for time-to-first-token; refusals retry on Claude Opus 4.8 via the SDK's client-side fallback middleware. Judge: Claude Haiku 5.5. Embeddings: Titan Text Embeddings V2 (1024 dims). Rerank: Cohere Rerank 3.5. All configurable per environment. |
+| Models | Answers and judge: OpenAI GPT-6 Luna (`us.openai.gpt-6-luna`) through Bedrock's OpenAI-compatible Responses API on `bedrock-runtime`, called with the OpenAI SDK's Bedrock provider (IAM SigV4). Reasoning effort `low` for time-to-first-token. GPT-6 Sol is a drop-in alternative at ~20× the token price. Embeddings: Titan Text Embeddings V2 (1024 dims). Rerank: Cohere Rerank 3.5. All configurable per environment. |
 | Guardrails | Applied with the `ApplyGuardrail` API to the question and to the streamed answer (every ~1,500 characters and at the end). A blocked answer is replaced in the UI. |
 | Database access | Apps connect as a least-privileged `rag_app` role (password in Secrets Manager). The master password is RDS-managed and used only by `db_init`. Dev/staging have no RDS Proxy, so they keep Serverless v2 auto-pause; prod uses RDS Proxy with a read-only endpoint for the reader. |
 | Retrieval | Hybrid search: HNSW cosine + `tsvector` full text, fused with reciprocal rank fusion, ACL-filtered, then reranked. `hnsw.ef_search` and `hnsw.iterative_scan` are role defaults so RDS Proxy connections aren't pinned. |

@@ -167,6 +167,16 @@ variable "rerank_model_id" {
   default     = "cohere.rerank-v3-5:0"
 }
 
+variable "generation_model_id" {
+  description = "Inference profile ID of the answer model (e.g. us.openai.gpt-6-luna)"
+  type        = string
+}
+
+variable "judge_model_id" {
+  description = "Inference profile ID of the evaluation judge model"
+  type        = string
+}
+
 variable "guardrail_arn" {
   description = "ARN of the Bedrock guardrail"
   type        = string

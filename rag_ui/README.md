@@ -1,6 +1,6 @@
 ## RAG App: Streamlit UI with AWS Cloud Backend
 
-A Streamlit web app for asking questions about company documents, backed by the FastAPI query service on AWS (Claude on Amazon Bedrock, Aurora pgvector).
+A Streamlit web app for asking questions about company documents, backed by the FastAPI query service on AWS (OpenAI GPT on Amazon Bedrock, Aurora pgvector).
 
 ![App](./images/ui.png)
 

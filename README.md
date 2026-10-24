@@ -3,9 +3,9 @@
     <img src="./images/rag-app.png" alt="RAG App on"/>
 </div>
 
-### Enterprise RAG App on AWS: Bedrock, Aurora pgvector, Fargate, with Web Search via a Remote MCP Server
+### Enterprise RAG App on AWS: Bedrock (OpenAI GPT), Aurora pgvector, Fargate, with Web Search via a Remote MCP Server
 
-Terraform-based **Infrastructure as Code (IaC)** for a production Retrieval-Augmented Generation (RAG) application, sized for an organisation of ~2,000 daily employees with 200–500 concurrent users. Employees sign in with their corporate account, upload documents, and ask questions answered by Claude on Amazon Bedrock from the documents they are allowed to see.
+Terraform-based **Infrastructure as Code (IaC)** for a production Retrieval-Augmented Generation (RAG) application, sized for an organisation of ~2,000 daily employees with 200–500 concurrent users. Employees sign in with their corporate account, upload documents, and ask questions answered by OpenAI GPT models on Amazon Bedrock from the documents they are allowed to see.
 
 👉 Target architecture and sizing: [docs/architecture/production-upgrade.md](docs/architecture/production-upgrade.md)
 
@@ -22,7 +22,7 @@ Terraform-based **Infrastructure as Code (IaC)** for a production Retrieval-Augm
 📌 Key features:
 - **Query API on ECS Fargate**: FastAPI service with streamed answers (Server-Sent Events), scheduled + target-tracking autoscaling and ECS-native blue/green deployments with automatic rollback.
 - **Edge**: CloudFront → internal ALB through a CloudFront VPC origin; the ALB has no public address.
-- **Models on Amazon Bedrock**: Claude (`anthropic.claude-opus-5-5`) for answers through the Messages-API Bedrock endpoint, Titan Text Embeddings V2, Cohere Rerank 3.5, Bedrock Guardrails on questions and answers. IAM auth over VPC endpoints, no API keys.
+- **Models on Amazon Bedrock**: OpenAI GPT-6 Luna (`us.openai.gpt-6-luna`) for answers and evaluation through Bedrock's OpenAI-compatible Responses API (OpenAI SDK), Titan Text Embeddings V2, Cohere Rerank 3.5, Bedrock Guardrails on questions and answers. Everything goes through `bedrock-runtime` with IAM auth over a VPC endpoint; no API keys.
 - **Hybrid retrieval with access control**: Aurora PostgreSQL + pgvector (HNSW) and full-text search fused with reciprocal rank fusion, filtered by a `document_acl` table using the user and groups from the JWT.
 - **Aurora with reader as standby**: in prod the reader serves vector search and is the automatic failover target; RDS Proxy pools connections.
 - **Semantic cache and rate limits**: ElastiCache (Valkey), scoped by the caller's permissions.
@@ -52,7 +52,7 @@ flowchart TB
         proxy --> reader["Aurora reader / standby"]
     end
 
-    api --> bedrock["Bedrock: Claude · embeddings · rerank · Guardrails"]
+    api --> bedrock["Bedrock: GPT-6 · embeddings · rerank · Guardrails"]
     ingest --> bedrock
     api --> ddb["DynamoDB: chat history · doc metadata"]
     api -->|retrieval weak| mcp["MCP web search"]
@@ -72,7 +72,7 @@ More diagrams (network, Aurora failover, scaling, query and ingestion sequences)
 1. `POST /query` with the user's Cognito access token → CloudFront → ALB → FastAPI.
 2. Rate-limit check, input guardrail, query embedding, semantic-cache lookup (scoped to the user's ACL principals).
 3. On a miss: hybrid search filtered by ACL on the Aurora reader, rerank, optional MCP web search when retrieval is weak.
-4. Claude streams the answer; the output guardrail checks it as it streams. The answer is cached, saved to chat history and sampled for online evaluation after the response.
+4. GPT-6 Luna streams the answer; the output guardrail checks it as it streams. The answer is cached, saved to chat history and sampled for online evaluation after the response.
 
 ---
 
@@ -114,7 +114,7 @@ More diagrams (network, Aurora failover, scaling, query and ingestion sequences)
 ### ⚙️ Build and Deployment
 
 #### 🛠️ Prerequisites
-- AWS account with access to the Bedrock models in your region: Claude Opus 5.5, Claude Opus 4.8 (refusal fallback), Claude Haiku 5.5 (evaluation judge), Titan Text Embeddings V2 and Cohere Rerank 3.5.
+- AWS account with access to these Bedrock models in your region: OpenAI GPT-6 Luna (answers and evaluation judge, via the `us.` cross-Region inference profile), Titan Text Embeddings V2 and Cohere Rerank 3.5. To use GPT-6 Sol for answers instead, set `generation_model_id = "us.openai.gpt-6-sol"` (about 20× the per-token price).
 - Terraform 1.5+ and the AWS CLI for the one-time bootstrap.
 - A corporate IdP application (Azure AD / Okta) for SAML or OIDC sign-in, for prod. Dev and staging can use Cognito users.
 - Optional: SonarCloud for the quality gate, SerpAPI key for the web search MCP server.
@@ -202,4 +202,4 @@ tox                       # Lambda unit tests + query service tests
 
 > **Note**: Deploying this infrastructure incurs AWS charges. Review `terraform plan` before applying.
 >
-> **Security**: Never commit secrets. CI authenticates to AWS with GitHub OIDC; the application reads database credentials from Secrets Manager and calls Bedrock with its IAM role.
+> **Security**: Never commit secrets. CI authenticates to AWS with GitHub OIDC; the application reads database credentials from Secrets Manager and calls Bedrock (including the OpenAI models) with its IAM role.

@@ -240,25 +240,19 @@ variable "rerank_model_id" {
 }
 
 variable "generation_model_id" {
-  description = "Claude model on Bedrock for answers"
+  description = "OpenAI model on Bedrock for answers (cross-Region inference profile ID; us.openai.gpt-6-sol for harder questions)"
   type        = string
-  default     = "anthropic.claude-opus-5-5"
-}
-
-variable "fallback_model_id" {
-  description = "Claude model the client-side refusal fallback retries on"
-  type        = string
-  default     = "anthropic.claude-opus-4-8"
+  default     = "us.openai.gpt-6-luna"
 }
 
 variable "judge_model_id" {
-  description = "Claude model used as the online-evaluation judge"
+  description = "OpenAI model on Bedrock used as the online-evaluation judge"
   type        = string
-  default     = "anthropic.claude-haiku-5-5"
+  default     = "us.openai.gpt-6-luna"
 }
 
 variable "generation_effort" {
-  description = "Effort for answer generation (low keeps time-to-first-token inside the SLO)"
+  description = "Reasoning effort for answer generation: none, low, medium, high (low keeps time-to-first-token inside the SLO)"
   type        = string
   default     = "low"
 }

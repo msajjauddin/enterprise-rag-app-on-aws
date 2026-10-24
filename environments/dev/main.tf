@@ -232,6 +232,8 @@ module "query_service" {
 
   embedding_model_id     = var.embedding_model_id
   rerank_model_id        = var.rerank_model_id
+  generation_model_id    = var.generation_model_id
+  judge_model_id         = var.judge_model_id
   guardrail_arn          = module.bedrock.guardrail_arn
   chat_history_table_arn = module.storage.chat_history_table_arn
   metadata_table_arn     = module.storage.metadata_table_arn
@@ -253,7 +255,6 @@ module "query_service" {
     EMBEDDING_DIMENSIONS     = var.embedding_dimensions
     RERANK_MODEL_ID          = var.rerank_model_id
     GENERATION_MODEL_ID      = var.generation_model_id
-    FALLBACK_MODEL_ID        = var.fallback_model_id
     JUDGE_MODEL_ID           = var.judge_model_id
     GENERATION_EFFORT        = var.generation_effort
     GUARDRAIL_ID             = module.bedrock.guardrail_id
