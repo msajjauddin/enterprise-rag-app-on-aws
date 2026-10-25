@@ -23,6 +23,7 @@ locals {
 
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
+data "aws_region" "current" {}
 
 # =========================
 # Ingestion queue + DLQ
@@ -152,6 +153,23 @@ resource "aws_iam_policy" "lambda_policy" {
         Resource = "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${var.embedding_model_id}"
       },
       {
+        # Vision model that describes charts and figures (cross-Region inference profile,
+        # the model in each destination Region, and the account's default project)
+        Effect = "Allow",
+        Action = ["bedrock:InvokeModel"],
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.vision_model_id}",
+          "arn:${data.aws_partition.current.partition}:bedrock:*::foundation-model/${replace(var.vision_model_id, "/^(us|global)\\./", "")}",
+          "arn:${data.aws_partition.current.partition}:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:project/default"
+        ]
+      },
+      {
+        # Table and scanned-page analysis (synchronous, one page image per call)
+        Effect   = "Allow",
+        Action   = ["textract:AnalyzeDocument"],
+        Resource = "*"
+      },
+      {
         Effect   = "Allow",
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"],
         Resource = aws_sqs_queue.ingestion.arn
@@ -223,6 +241,12 @@ resource "aws_lambda_function" "document_processor" {
       EMBEDDING_BATCH_SIZE = 16
       CHUNK_SIZE           = 1000
       CHUNK_OVERLAP        = 200
+
+      # Layout-aware PDF analysis: tables via Textract, charts described by the vision model
+      DOCUMENT_ANALYSIS        = var.document_analysis_mode
+      VISION_MODEL_ID          = var.vision_model_id
+      MAX_FIGURES_PER_DOCUMENT = var.max_figures_per_document
+      TABLE_CHUNK_MAX_CHARS    = 4000
     }
   }
 

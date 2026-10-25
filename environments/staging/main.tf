@@ -172,6 +172,9 @@ module "compute" {
 
   embedding_model_id   = var.embedding_model_id
   embedding_dimensions = var.embedding_dimensions
+
+  document_analysis_mode = var.document_analysis_mode
+  vision_model_id        = var.vision_model_id
 }
 
 # ====================

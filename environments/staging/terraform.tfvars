@@ -50,7 +50,7 @@ cache_node_count = 1
 # -------------------------
 # Ingestion Lambda
 # -------------------------
-lambda_memory_size = 1024
+lambda_memory_size = 2048
 
 # -------------------------
 # Query service: scaled to zero outside working hours

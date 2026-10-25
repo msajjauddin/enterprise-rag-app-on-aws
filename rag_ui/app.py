@@ -354,7 +354,8 @@ def render_sources(sources, web_search_used):
     with st.expander(f"Sources ({len(sources)} documents{' + web search' if web_search_used else ''})"):
         for source in sources:
             page = f", page {source['page'] + 1}" if isinstance(source.get("page"), int) else ""
-            st.markdown(f"**{source['file_name']}**{page} · relevance {source['score']:.2f}")
+            kind = {"table": " · 📊 table", "figure": " · 📈 chart/figure"}.get(source.get("element_type"), "")
+            st.markdown(f"**{source['file_name']}**{page}{kind} · relevance {source['score']:.2f}")
             st.caption(source["snippet"])
         if web_search_used:
             st.info("Part of this answer comes from a web search because the documents didn't cover it well.")

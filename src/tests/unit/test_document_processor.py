@@ -142,8 +142,7 @@ class TestProcessDocument(unittest.TestCase):
             "s3": patch("document_processor.document_processor.s3_client"),
             "dynamodb": patch("document_processor.document_processor.dynamodb"),
             "embed": patch("document_processor.document_processor.embed_documents"),
-            "loader": patch("document_processor.document_processor.get_document_loader"),
-            "chunk": patch("document_processor.document_processor.chunk_documents"),
+            "chunks": patch("document_processor.document_processor.build_chunks"),
             "connect": patch("document_processor.document_processor.get_postgres_connection"),
             "creds": patch("document_processor.document_processor.get_postgres_credentials"),
             "execute_values": patch("document_processor.document_processor.execute_values"),
@@ -153,8 +152,9 @@ class TestProcessDocument(unittest.TestCase):
             self.addCleanup(p.stop)
 
         self.mocks["s3"].head_object.return_value = {"Metadata": {"acl": "group:finance"}}
-        chunk = MagicMock(page_content="Employees get 25 vacation days.", metadata={"page": 1})
-        self.mocks["chunk"].return_value = [chunk, chunk]
+        text_chunk = MagicMock(page_content="Employees get 25 vacation days.", metadata={"page": 1, "element_type": "text"})
+        table_chunk = MagicMock(page_content="Table from handbook.pdf, page 2:\n| a | b |", metadata={"page": 1, "element_type": "table"})
+        self.mocks["chunks"].return_value = [text_chunk, table_chunk]
         self.mocks["embed"].return_value = [[0.1] * 4, [0.2] * 4]
 
         self.cursor = MagicMock()
@@ -184,9 +184,11 @@ class TestProcessDocument(unittest.TestCase):
         self.assertEqual(rows[0][5], "[0.1,0.1,0.1,0.1]")
         self.conn.close.assert_called_once()
 
+        self.assertEqual(json.loads(rows[1][4])["element_type"], "table")
+
         item = self.mocks["dynamodb"].Table.return_value.put_item.call_args.kwargs["Item"]
         self.assertEqual(item["status"], "processed")
-        self.assertEqual(item["num_chunks"], 2)
+        self.assertEqual((item["num_chunks"], item["num_tables"], item["num_figures"]), (2, 1, 0))
 
     def test_connector_acl_overrides_object_metadata(self):
         dp.process_document(self.job(acl="group:hr", owner_id="sharepoint-sync"))
@@ -198,6 +200,28 @@ class TestProcessDocument(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             dp.process_document(self.job())
         self.mocks["connect"].assert_not_called()
+
+
+class TestBuildChunks(unittest.TestCase):
+
+    def test_pdf_elements_become_typed_chunks(self):
+        from document_processor.pdf_analysis import Element
+        elements = [
+            Element("text", 0, "Intro text"),
+            Element("table", 1, "| h1 | h2 |\n|---|---|\n| a | b |"),
+            Element("figure", 1, "Bar chart of revenue by quarter."),
+        ]
+        splitter = dp.RecursiveCharacterTextSplitter.return_value
+        splitter.split_documents.side_effect = lambda docs: docs
+        with patch("document_processor.document_processor.analyze_pdf", return_value=elements) as analyze, \
+             patch("document_processor.document_processor.Document",
+                   side_effect=lambda page_content, metadata: MagicMock(page_content=page_content, metadata=metadata)):
+            chunks = dp.build_chunks("/tmp/x.pdf", "report.pdf", "application/pdf")
+
+        self.assertEqual([c.metadata["element_type"] for c in chunks], ["text", "table", "figure"])
+        self.assertTrue(chunks[1].page_content.startswith("Table from report.pdf, page 2:\n| h1 | h2 |"))
+        self.assertEqual(chunks[2].page_content, "Figure from report.pdf, page 2: Bar chart of revenue by quarter.")
+        self.assertEqual(analyze.call_args.kwargs["mode"], dp.DOCUMENT_ANALYSIS)
 
 
 if __name__ == "__main__":

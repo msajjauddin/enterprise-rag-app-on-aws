@@ -27,6 +27,7 @@ Terraform-based **Infrastructure as Code (IaC)** for a production Retrieval-Augm
 - **Aurora with reader as standby**: in prod the reader serves vector search and is the automatic failover target; RDS Proxy pools connections.
 - **Semantic cache and rate limits**: ElastiCache (Valkey), scoped by the caller's permissions.
 - **Ingestion pipeline**: S3 / connectors → SQS → Lambda with batched embeddings, partial-batch retries and a dead-letter queue with an alarm.
+- **Tables, charts and scans in PDFs**: every page is triaged automatically; tables are extracted with Amazon Textract as Markdown (rows and columns kept), charts and figures are described in words by GPT-6 Luna, scanned pages are OCR'd. Plain-text pages skip the extra steps.
 - **Single sign-on**: Cognito federated with the corporate IdP (SAML or OIDC); IdP groups land in the access token.
 - **Evaluation**: golden-set evaluation gate in CI, plus asynchronous sampled online evaluation and user feedback.
 - **Observability**: CloudWatch dashboard (p95 latency, time-to-first-token, tokens, cost/query, cache hit rate, web-fallback rate), SLO alarms, X-Ray traces via the ADOT collector.
@@ -65,7 +66,8 @@ More diagrams (network, Aurora failover, scaling, query and ingestion sequences)
 #### 🗂️ Document ingestion
 1. The UI asks `POST /documents/upload-url` for a presigned S3 POST (the user can share the document with groups they belong to) and uploads the file directly to S3.
 2. S3 publishes the object-created event to the ingestion SQS queue. Connectors (SharePoint, Confluence sync jobs) publish `{"bucket", "key", "acl": [...]}` messages to the same queue.
-3. The `document_processor` Lambda loads and chunks the document, embeds chunks in batches with Bedrock, and replaces the document's chunks and ACL in Aurora in one transaction.
+3. The `document_processor` Lambda reads the document. For PDFs it triages each page locally (pdfplumber): pages with tables or scanned content go to Textract, charts and large images are cropped and described by GPT-6 Luna, everything else is extracted as text. Tables stay whole in their own chunks (split by rows with the header repeated if large). Chunks are embedded in batches with Bedrock and the document's chunks and ACL are replaced in Aurora in one transaction.
+   Set `document_analysis_mode` to `full` (Textract on every page) or `off` (text only) per environment.
 4. Messages that fail three times move to the DLQ, which raises an alarm.
 
 #### 💬 Query
@@ -102,7 +104,7 @@ More diagrams (network, Aurora failover, scaling, query and ingestion sequences)
 ├── services/query_api/        # FastAPI query service (Dockerfile, app/, tests/)
 ├── src/                       # Lambda functions
 │   ├── db_init/               # Schema migrations (pgvector, HNSW, document_acl, app role)
-│   ├── document_processor/    # SQS-driven ingestion with batched Bedrock embeddings
+│   ├── document_processor/    # SQS-driven ingestion: PDF table/chart analysis, batched Bedrock embeddings
 │   ├── token_enricher/        # Cognito pre-token-generation: IdP groups -> cognito:groups
 │   └── tests/                 # Lambda unit tests and post-deploy integration tests
 ├── sonar-project.properties
@@ -114,7 +116,7 @@ More diagrams (network, Aurora failover, scaling, query and ingestion sequences)
 ### ⚙️ Build and Deployment
 
 #### 🛠️ Prerequisites
-- AWS account with access to these Bedrock models in your region: OpenAI GPT-6 Luna (answers and evaluation judge, via the `us.` cross-Region inference profile), Titan Text Embeddings V2 and Cohere Rerank 3.5. To use GPT-6 Sol for answers instead, set `generation_model_id = "us.openai.gpt-6-sol"` (about 20× the per-token price).
+- AWS account with access to these Bedrock models in your region: OpenAI GPT-6 Luna (answers, evaluation judge and chart descriptions, via the `us.` cross-Region inference profile), Titan Text Embeddings V2 and Cohere Rerank 3.5. To use GPT-6 Sol for answers instead, set `generation_model_id = "us.openai.gpt-6-sol"` (about 20× the per-token price).
 - Terraform 1.5+ and the AWS CLI for the one-time bootstrap.
 - A corporate IdP application (Azure AD / Okta) for SAML or OIDC sign-in, for prod. Dev and staging can use Cognito users.
 - Optional: SonarCloud for the quality gate, SerpAPI key for the web search MCP server.

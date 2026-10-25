@@ -17,21 +17,21 @@ variable "stage" {
 # Lambda Configuration
 # -------------------------
 variable "lambda_memory_size" {
-  description = "Memory size for the document processor in MB"
+  description = "Memory size for the document processor in MB (page rendering for PDF analysis needs headroom)"
   type        = number
-  default     = 1024
+  default     = 2048
 }
 
 variable "ingestion_timeout" {
-  description = "Timeout for the document processor in seconds (queue visibility is 6x this)"
+  description = "Timeout for the document processor in seconds (queue visibility is 6x this). Large PDFs with many tables and charts need minutes."
   type        = number
-  default     = 300
+  default     = 900
 }
 
 variable "ingestion_batch_size" {
-  description = "SQS messages per Lambda invocation"
+  description = "SQS messages per Lambda invocation (1 keeps a large analysed PDF within the 15-minute limit; concurrency gives throughput)"
   type        = number
-  default     = 5
+  default     = 1
 }
 
 variable "ingestion_max_concurrency" {
@@ -128,6 +128,29 @@ variable "embedding_dimensions" {
   description = "Embedding vector size (must match the pgvector column)"
   type        = number
   default     = 1024
+}
+
+variable "document_analysis_mode" {
+  description = "PDF analysis: triage (only pages with tables, figures or scans get Textract / vision), full (Textract on every page), off (text only)"
+  type        = string
+  default     = "triage"
+
+  validation {
+    condition     = contains(["triage", "full", "off"], var.document_analysis_mode)
+    error_message = "document_analysis_mode must be triage, full or off."
+  }
+}
+
+variable "vision_model_id" {
+  description = "Bedrock model (cross-Region inference profile ID) that describes charts and figures"
+  type        = string
+  default     = "us.openai.gpt-6-luna"
+}
+
+variable "max_figures_per_document" {
+  description = "Cost guard: maximum figures described per document"
+  type        = number
+  default     = 30
 }
 
 variable "max_retries" {

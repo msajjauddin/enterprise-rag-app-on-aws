@@ -86,3 +86,7 @@ sys.modules['langchain.schema'] = mock_schema
 sys.modules['langchain.schema'].Document = MockDocument
 sys.modules['langchain_community'] = mock_langchain_community
 sys.modules['langchain_community.document_loaders'] = mock_langchain_community_document_loaders
+
+# PDF libraries (pdf_analysis logic is tested with fake page objects)
+sys.modules['pdfplumber'] = MagicMock()
+sys.modules['pypdfium2'] = MagicMock()

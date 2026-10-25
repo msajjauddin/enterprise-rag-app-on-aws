@@ -2,4 +2,6 @@ boto3>=1.38.6
 psycopg2-binary>=2.9.10
 langchain>=0.3.24
 langchain-community>=0.3.23
-pypdf>=5.4.0
+pdfplumber>=0.11.4
+pypdfium2>=4.30
+pillow>=10.4

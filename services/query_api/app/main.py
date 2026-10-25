@@ -98,6 +98,7 @@ def source_summary(chunks: List[dict]) -> List[dict]:
             "file_name": c["file_name"],
             "document_id": c["document_id"],
             "page": (c.get("metadata") or {}).get("page"),
+            "element_type": (c.get("metadata") or {}).get("element_type", "text"),
             "score": round(c.get("relevance_score", c.get("similarity", 0.0)), 4),
             "snippet": c["content"][:300],
         }
@@ -400,6 +401,6 @@ def list_documents(user: User = Depends(get_current_user)):
     """The caller's uploads and their ingestion status."""
     items = metadata_table().query(
         IndexName="UserIndex", KeyConditionExpression=Key("user_id").eq(user.user_id)).get("Items", [])
-    fields = ("document_id", "file_name", "status", "num_chunks", "shared_with", "updated_at")
+    fields = ("document_id", "file_name", "status", "num_chunks", "num_tables", "num_figures", "shared_with", "updated_at")
     documents = [{k: v for k, v in history.from_dynamo(i).items() if k in fields} for i in items]
     return {"items": sorted(documents, key=lambda d: d.get("updated_at", 0), reverse=True)}

@@ -63,5 +63,5 @@ variable "enable_rds_proxy" {
 variable "interface_endpoints" {
   description = "AWS services reached through interface VPC endpoints"
   type        = list(string)
-  default     = ["bedrock-runtime", "secretsmanager", "logs"]
+  default     = ["bedrock-runtime", "textract", "secretsmanager", "logs"]
 }

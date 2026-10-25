@@ -94,7 +94,7 @@ flowchart TB
             dbB["Database subnet 10.0.5.0/24<br/>Aurora reader/standby · ElastiCache replica"]
         end
         gwe["Gateway endpoints (free)<br/>S3 · DynamoDB"]
-        ife["Interface endpoints<br/>bedrock-runtime · secretsmanager · logs"]
+        ife["Interface endpoints<br/>bedrock-runtime · textract · secretsmanager · logs"]
     end
 
     igw --- pubA
@@ -158,7 +158,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant U as React UI
+    participant U as Streamlit UI
     participant A as FastAPI (Fargate)
     participant C as ElastiCache
     participant P as RDS Proxy → Aurora reader
@@ -195,13 +195,21 @@ sequenceDiagram
     participant S as S3 / connectors
     participant Q as SQS
     participant L as Ingestion Lambda
+    participant T as Textract
     participant B as Bedrock
     participant P as RDS Proxy → Aurora writer
     participant D as DLQ
 
     S->>Q: new / updated document event
     Q->>L: batch of messages
-    L->>L: load, chunk, attach ACL groups
+    L->>L: triage PDF pages (tables / charts / scans)
+    opt pages with tables or scans
+        L->>T: Textract AnalyzeDocument (tables as Markdown)
+    end
+    opt charts and large images
+        L->>B: describe figure (GPT-6 Luna, vision)
+    end
+    L->>L: chunk (tables kept whole), attach ACL groups
     L->>B: batched embeddings
     L->>P: upsert chunks + vectors
     alt failure after max retries
@@ -235,12 +243,12 @@ Hourly-billed resources that cost money with zero traffic. Verify with the AWS P
 | NAT gateways × 2 | ~$2.20 |
 | ElastiCache × 2 | ~$1.50 |
 | RDS Proxy | ~$1.45 |
-| Interface endpoints (3 × 2 AZs) | ~$1.45 |
+| Interface endpoints (4 × 2 AZs) | ~$1.90 |
 | ALB | ~$0.75 |
 | Public IPv4, Secrets, KMS, CloudWatch, storage | ~$1.00 |
-| **Total** | **~$24/day (~$72 for 3 idle days)** |
+| **Total** | **~$25/day (~$75 for 3 idle days)** |
 
-Bedrock, Lambda, SQS and CloudFront cost nothing when idle.
+Bedrock, Textract, Lambda, SQS and CloudFront cost nothing when idle.
 
 ---
 
@@ -258,6 +266,7 @@ Where the code differs from, or fills in, the design above.
 | Retrieval | Hybrid search: HNSW cosine + `tsvector` full text, fused with reciprocal rank fusion, ACL-filtered, then reranked. `hnsw.ef_search` and `hnsw.iterative_scan` are role defaults so RDS Proxy connections aren't pinned. |
 | Semantic cache | Valkey; entries are scoped to the caller's exact set of ACL principals; exact-match plus cosine ≥ 0.95 over the 200 most recent questions in that scope; 1 h TTL. No invalidation on ingestion beyond the TTL. |
 | Groups in tokens | Cognito pre-token-generation (V2, Essentials tier) merges the IdP `custom:groups` attribute into `cognito:groups` in the access token. |
+| PDF tables and charts | Each PDF page is triaged locally with pdfplumber (table finder, image sizes, vector shapes, missing text layer). Flagged pages are rendered with pypdfium2: table/scanned pages go to Textract `AnalyzeDocument` (TABLES) synchronously, charts and images over 4% of the page are cropped and described by GPT-6 Luna through `Converse`. Tables become Markdown chunks; figures become text descriptions. If Textract fails, pdfplumber's own table extraction is used. Modes: `triage` (default), `full`, `off`. Cost guard: 30 figures per document. One document per Lambda invocation, 15-minute timeout, 2 GB memory. |
 | Ingestion connectors | SharePoint/Confluence sync jobs are not built; they publish `{bucket, key, acl}` messages to the ingestion queue, which the processor already accepts. |
 | Online eval | Runs in the query service after the response is sent (sample rate 5% prod, 10% staging), not as a separate worker. |
 | CI eval gate | `evals/run_eval.py` runs after every deploy as a Cognito client-credentials client in the `eval` group, against fixture documents shared only with that group. |

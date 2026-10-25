@@ -27,7 +27,7 @@ variable "stage" {
 variable "lambda_memory_size" {
   description = "Memory size for the document processor Lambda in MB"
   type        = number
-  default     = 1024
+  default     = 2048
 }
 
 # -------------------------
@@ -231,6 +231,18 @@ variable "embedding_dimensions" {
   description = "Embedding size; changing it requires re-ingesting all documents"
   type        = number
   default     = 1024
+}
+
+variable "document_analysis_mode" {
+  description = "PDF analysis: triage (tables/charts/scans detected per page), full (Textract on every page), off (text only)"
+  type        = string
+  default     = "triage"
+}
+
+variable "vision_model_id" {
+  description = "Bedrock model that describes charts and figures during ingestion"
+  type        = string
+  default     = "us.openai.gpt-6-luna"
 }
 
 variable "rerank_model_id" {
